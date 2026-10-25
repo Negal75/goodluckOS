@@ -14,9 +14,10 @@ item lands or gets disproven.
 | Firmware builder recognizes the GamiJa stock layout (script.bin probe + scan + layout report) | **done** (docs/download.html) |
 | Dump analysis tooling | **done** (image/tools/analyze-gaminja-dump.py) |
 | NV3051D panel wired into the kernel build | **done** (untested, no hw) |
-| GamiJa DTB baseline (A23 + A33) | **done** (untested, no hw) |
+| GamiJa A33 DTB baseline (panel1 + panel2 variants) | **done** (untested, no hw) |
 | Kernel/boot offset of GamiJa stock firmware | **open** — needs a mapped stock dump |
 | Matches no approved script.bin hash yet | **open** — extract + whitelist |
+| Which NV3051D panel variant (panel1 vs panel2) | **open** — try both on hw |
 | Gamepad GPIOs / analog-stick MCU | **open** — PCB differs from GA36-MB |
 | Audio path (speaker pin, jack return) | **open** |
 | GamiJa base images (BOOT_SECTOR-aware) | **done, gated** (`GAMINJA_KERNEL_SECTOR`) |
@@ -24,10 +25,12 @@ item lands or gets disproven.
 
 ## What we know (from issue #99)
 
-- The GamiJa hardware is **SoC-compatible** with the GA36-MB (same Allwinner
-  family, not an RK3326 device like some R36S/Ultra variants — see issue #125
-  for why that rules those out), but the **PCB is not identical**, so a
-  purpose-built `.dtb` is required.
+- The GamiJa hardware uses an **Allwinner A33** (SoC confirmed by the device
+  owner; cross-check against the fex when a dump is handy), so A33 is the
+  only DTB variant being built — see issue #125 for why RK3326-based
+  R36S/Ultra units are out of scope.
+- The **PCB is not identical** to the GA36-MB, so a purpose-built `.dtb` is
+  required.
 - The stock firmware is a **Batocera-like Linux build** with a **different
   bootloader layout** than the GA36-MB stock cards.
 - From a real stock dump:
@@ -37,10 +40,12 @@ item lands or gets disproven.
     **TBD**. This is why goodluckOS cannot boot on these units yet: base
     images must be built with the boot image at the offset the stock
     bootloader actually loads from.
-- The display on the examined unit is an **NV3051**-family panel. Upstream
-  Linux ships `drivers/gpu/drm/panel/panel-newvision-nv3051d.c` (4-lane DSI,
-  640x480), so panel support needs **no reverse-engineered .ko** for a
-  change. see `kernel/dts/gaminja-r36s.dtsi`.
+- The display on the examined unit is an **NV3051**-family panel — the exact
+  panel variant is unknown (same "two possible panels, no way to tell" drill
+  as the GA36-MB). Upstream Linux ships
+  `drivers/gpu/drm/panel/panel-newvision-nv3051d.c` (4-lane DSI, 640x480),
+  so panel support needs **no reverse-engineered .ko** for a change. The
+  kernel builds both variants — see `kernel/dts/gaminja-r36s.dtsi`.
 
 ## Tooling in this repo
 
@@ -72,11 +77,13 @@ and MiB offsets so `dd` commands can be written straight from the report.
 
 ### 3. Kernel
 
-- `kernel/dts/gaminja-r36s.dtsi` — shared baseline (panel node + TODO list).
-- `kernel/dts/gaminja-r36s-a23.dts` / `gaminja-r36s-a33.dts` — SoC variants;
-  flash whichever matches the measured SoC from the fex.
+- `kernel/dts/gaminja-r36s.dtsi` — shared baseline (panel skeleton + TODO list).
+- `kernel/dts/gaminja-r36s-a33-panel1.dts` / `-panel2.dts` — the two
+  NV3051D panel variants (they differ only in DSI mode_flags). Flash
+  whichever matches the unit's panel; just like the GA36-MB, try both if
+  one gives a black screen.
 - `CONFIG_DRM_PANEL_NEWVISION_NV3051D` is enabled in `kernel/Dockerfile`;
-  build outputs `android_boot_gaminja_a23/a33.img` + dtbs.
+  build outputs `android_boot_gaminja_a33_panel1/2.img` + dtbs.
 
 The DTB baseline inherits the GA36-MB button/LED/audio map on purpose: it is
 the fastest way to get a kernel the LCD and serial console work on, then
@@ -84,8 +91,8 @@ diff real hardware against it. Do not trust the inputs until verified.
 
 ### 4. Boot offset-aware base images
 
-`image/build.sh` builds `goodluck_base_gaminja_a23.img` /
-`goodluck_base_gaminja_a33.img` **only** when you explicitly pass the
+`image/build.sh` builds `goodluck_base_gaminja_a33_panel1.img` /
+`goodluck_base_gaminja_a33_panel2.img` **only** when you explicitly pass the
 measured kernel sector:
 
 ```bash
@@ -99,17 +106,17 @@ is enforced inside `image/Dockerfile`.
 ## Next steps (in order)
 
 1. **Map the stock layout.** Run the analyzer on a full GamiJa dump and add
-   the findings to the table below. Identify which image the stock
+   the findings to the table above. Identify which image the stock
    bootloader actually loads (`eGON` chain, `ANDROID!`, FIT/extlinux/Batocera
    loader assets).
 2. **Whitelist the script.bin.** Extract via builder or analyzer, compute
    SHA-256, add an entry to `KNOWN_HASHES` in docs/download.html, and (with
    hardware on hand) mark `supported: true`.
 3. **Build + flash a test image.** Kernel first via
-   `dd if=android_boot_gaminja_aXX.img bs=512 seek=<measured sector> of=/dev/sdX
+   `dd if=android_boot_gaminja_a33_panel1.img bs=512 seek=<measured sector> of=/dev/sdX
    conv=notrunc` onto the untouched stock card, watching the serial console
-   (`USB TTY`) and trying both SoC variants if unsure.
-4. **Fix the DTB against reality**: panel (rg351v vs rg353p timing),
+   (`USB TTY`). Try `panel2` if the display stays black.
+4. **Fix the DTB against reality**: panel picked (panel1 vs panel2),
    gamepad GPIOs + analog MCU protocol, LEDs, LRADC volume keys, audio.
 5. **Full image + firmware-builder release once stable.**
 

@@ -1,0 +1,16 @@
+/dts-v1/;
+
+#include "sun8i-a33.dtsi"
+#include "gaminja-r36s.dtsi"
+
+/ {
+    compatible = "gaminja,r36s-a33-handheld", "allwinner,sun8i-a33";
+};
+
+/* Panel 1: rg351v-compatible NV3051D (4-lane DSI, MIPI_DSI_MODE_NO_EOT_PACKET).
+ * Tries first; if the screen stays black, flash a panel2 image instead. */
+&dsi {
+    panel@0 {
+        compatible = "anbernic,rg351v-panel";
+    };
+};

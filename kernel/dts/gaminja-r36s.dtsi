@@ -1,27 +1,33 @@
 /*
  * GamiJa R36S (Batocera clone) - shared device tree baseline
  *
- * Tracked in goodluckOS issue #99. The GamiJa units use an Allwinner SoC
- * compatible with the GA36-MB family, but the PCB differs (unverified:
- * button wiring, MCU/UART wiring, LED placement...). This dtsi therefore
- * includes ga36mb.dtsi as a known-good starting point and makes only the
- * changes we have evidence for. EVERY node marked TBD below must be
- * verified against the unit's fex (sunxi-fexc script.bin -> .fex) and PCB
+ * Tracked in goodluckOS issue #99. The GamiJa units run an Allwinner A33
+ * (SoC confirmed from a unit owner's report; cross-check with the fex when
+ * a dump is available - sunxi-fexc script.bin -> .fex), but the PCB differs
+ * from the GA36-MB (unverified: button wiring, MCU/UART wiring, LED
+ * placement...). This dtsi therefore includes ga36mb.dtsi as a known-good
+ * starting point and makes only the changes we have evidence for. EVERY
+ * node marked TBD below must be verified against the unit's fex and PCB
  * photos before being trusted.
  *
  * Known so far (from issue #99):
  *   - Stock layout differs from GA36-MB (script.bin at byte 20488192; see
  *     image/tools/analyze-gaminja-dump.py).
- *   - Display is an NV3051 on the examined units. Upstream Linux already
- *     ships drivers/gpu/drm/panel/panel-newvision-nv3051d.c, so no
- *     reverse-engineered .ko is needed. compatible strings today:
- *       "anbernic,rg351v-panel" (640x480 3.5", multi-mode incl. 60 Hz)
- *       "anbernic,rg353p-panel" / "powkiddy,rk2023-panel"
- *     We start with rg351v-panel. If the panel blanks/eink issues show up,
- *     try rg353p or fix the driver with a GamiJa-specific compatible.
+ *   - Display is an NV3051-family panel. Upstream Linux already ships
+ *     drivers/gpu/drm/panel/panel-newvision-nv3051d.c, so no
+ *     reverse-engineered .ko is needed.
+ *
+ * The exact panel variant is unknown (like the GA36-MB, units ship with
+ * different panels and there is no way to tell them apart ahead of time).
+ * The top-level gaminja-r36s-a33-panel1.dts / -panel2.dts files select the
+ * compatible:
+ *   panel1: "anbernic,rg351v-panel" - mode_flags include
+ *           MIPI_DSI_MODE_NO_EOT_PACKET
+ *   panel2: "anbernic,rg353p-panel" - same 640x480 modes, no EOT suppression
+ * Just like the GA36-MB: try both if one gives you a black screen.
  *
  * TODO (needs hardware):
- *   - confirm SoC from the fex and whether both A23/A33 images are needed
+ *   - cross-check SoC/mmr wiring against the unit's fex
  *   - gamepad GPIO map & the analog-stick MCU protocol/UART pins
  *   - panel reset GPIO and power supply rail
  *   - LEDs, volume keys (LRADC ladder), mmc card-detect
@@ -33,12 +39,14 @@
 };
 
 &dsi {
-    /* The statement block in ga36mb.dtsi declares the JD9366 panel; the
-     * GamiJa uses an NV3051D-compatible controller instead. */
+    /* ga36mb.dtsi declares the JD9366 panel; the GamiJa uses an NV3051D-
+     * family controller instead. The compatible string is selected by the
+     * panel1/panel2 top-level files; reg/reset/backlight live here.
+     * NOTE: do not flash without one of them - without a compatible the
+     * panel probe fails and the display stays black. */
     /delete-node/ panel@0;
 
     panel@0 {
-        compatible = "anbernic,rg351v-panel"; /* NV3051D, 640x480, 4-lane DSI */
         reg = <0>;
         vdd-supply = <&reg_dc1sw>;
         reset-gpios = <&pio 7 7 GPIO_ACTIVE_LOW>; /* TBD: verify against fex/PCB */

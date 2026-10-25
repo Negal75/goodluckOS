@@ -164,7 +164,7 @@ COPY dts/ arch/arm/boot/dts/allwinner/
 # COPY dts/sun8i-a33-ga36mb.dts arch/arm/boot/dts/allwinner/
 # COPY dts/sun8i-a23-ga36mb.dts arch/arm/boot/dts/allwinner/
 RUN echo 'dtb-$(CONFIG_MACH_SUN8I) += ga36mb-a23-panel1.dtb ga36mb-a23-panel2.dtb ga36mb-a33-panel1.dtb ga36mb-a33-panel2.dtb\n' >> arch/arm/boot/dts/allwinner/Makefile
-RUN echo 'dtb-$(CONFIG_MACH_SUN8I) += gaminja-r36s-a23.dtb gaminja-r36s-a33.dtb\n' >> arch/arm/boot/dts/allwinner/Makefile
+RUN echo 'dtb-$(CONFIG_MACH_SUN8I) += gaminja-r36s-a33-panel1.dtb gaminja-r36s-a33-panel2.dtb\n' >> arch/arm/boot/dts/allwinner/Makefile
 
 # Enable the upstream Newvision NV3051D panel driver, which covers GamiJa
 # R36S stock panels (issue #99) without needing a reverse-engineered .ko,
@@ -217,36 +217,36 @@ RUN mkbootimg \
 # GamiJa R36S boot images (issue #99). NOTE: a full GamiJa build also needs
 # matching base images flashed at the GamiJa kernel offset - see
 # image/Dockerfile (BOOT_SECTOR) and docs/gaminja-r36s.md.
-RUN cat arch/arm/boot/zImage arch/arm/boot/dts/allwinner/gaminja-r36s-a23.dtb > arch/arm/boot/zImage_with_dtb_gaminja_a23
-RUN cat arch/arm/boot/zImage arch/arm/boot/dts/allwinner/gaminja-r36s-a33.dtb > arch/arm/boot/zImage_with_dtb_gaminja_a33
+RUN cat arch/arm/boot/zImage arch/arm/boot/dts/allwinner/gaminja-r36s-a33-panel1.dtb > arch/arm/boot/zImage_with_dtb_gaminja_a33_panel1
+RUN cat arch/arm/boot/zImage arch/arm/boot/dts/allwinner/gaminja-r36s-a33-panel2.dtb > arch/arm/boot/zImage_with_dtb_gaminja_a33_panel2
 
 RUN mkbootimg \
-    --kernel arch/arm/boot/zImage_with_dtb_gaminja_a23 \
+    --kernel arch/arm/boot/zImage_with_dtb_gaminja_a33_panel1 \
     --ramdisk empty_ramdisk \
     --base 0x40000000 \
     --board sun8i \
     --pagesize 2048 \
-    -o /src/android_boot_gaminja_a23.img
+    -o /src/android_boot_gaminja_a33_panel1.img
 
 RUN mkbootimg \
-    --kernel arch/arm/boot/zImage_with_dtb_gaminja_a33 \
+    --kernel arch/arm/boot/zImage_with_dtb_gaminja_a33_panel2 \
     --ramdisk empty_ramdisk \
     --base 0x40000000 \
     --board sun8i \
     --pagesize 2048 \
-    -o /src/android_boot_gaminja_a33.img
+    -o /src/android_boot_gaminja_a33_panel2.img
 
 FROM scratch AS artifacts
 COPY --from=kernel_builder /src/android_boot_a23_panel1.img ./android_boot_a23_panel1.img
 COPY --from=kernel_builder /src/android_boot_a23_panel2.img ./android_boot_a23_panel2.img
 COPY --from=kernel_builder /src/android_boot_a33_panel1.img ./android_boot_a33_panel1.img
 COPY --from=kernel_builder /src/android_boot_a33_panel2.img ./android_boot_a33_panel2.img
-COPY --from=kernel_builder /src/android_boot_gaminja_a23.img ./android_boot_gaminja_a23.img
-COPY --from=kernel_builder /src/android_boot_gaminja_a33.img ./android_boot_gaminja_a33.img
+COPY --from=kernel_builder /src/android_boot_gaminja_a33_panel1.img ./android_boot_gaminja_a33_panel1.img
+COPY --from=kernel_builder /src/android_boot_gaminja_a33_panel2.img ./android_boot_gaminja_a33_panel2.img
 COPY --from=kernel_builder /src/linux/arch/arm/boot/dts/allwinner/ga36mb-a23-panel1.dtb ./dtb/ga36mb-a23-panel1.dtb
 COPY --from=kernel_builder /src/linux/arch/arm/boot/dts/allwinner/ga36mb-a23-panel2.dtb ./dtb/ga36mb-a23-panel2.dtb
 COPY --from=kernel_builder /src/linux/arch/arm/boot/dts/allwinner/ga36mb-a33-panel1.dtb ./dtb/ga36mb-a33-panel1.dtb
 COPY --from=kernel_builder /src/linux/arch/arm/boot/dts/allwinner/ga36mb-a33-panel2.dtb ./dtb/ga36mb-a33-panel2.dtb
-COPY --from=kernel_builder /src/linux/arch/arm/boot/dts/allwinner/gaminja-r36s-a23.dtb ./dtb/gaminja-r36s-a23.dtb
-COPY --from=kernel_builder /src/linux/arch/arm/boot/dts/allwinner/gaminja-r36s-a33.dtb ./dtb/gaminja-r36s-a33.dtb
+COPY --from=kernel_builder /src/linux/arch/arm/boot/dts/allwinner/gaminja-r36s-a33-panel1.dtb ./dtb/gaminja-r36s-a33-panel1.dtb
+COPY --from=kernel_builder /src/linux/arch/arm/boot/dts/allwinner/gaminja-r36s-a33-panel2.dtb ./dtb/gaminja-r36s-a33-panel2.dtb
 COPY --from=kernel_builder /src/linux/.config ./kernel_config.txt

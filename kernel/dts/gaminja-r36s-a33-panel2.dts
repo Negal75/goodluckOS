@@ -1,0 +1,17 @@
+/dts-v1/;
+
+#include "sun8i-a33.dtsi"
+#include "gaminja-r36s.dtsi"
+
+/ {
+    compatible = "gaminja,r36s-a33-handheld", "allwinner,sun8i-a33";
+};
+
+/* Panel 2: rg353p-compatible NV3051D (640x480, EOT packets allowed).
+ * Only differ from panel1 by the DSI mode_flags; try both if one gives a
+ * black screen (same drill as the GA36-MB panels). */
+&dsi {
+    panel@0 {
+        compatible = "anbernic,rg353p-panel";
+    };
+};
