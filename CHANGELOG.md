@@ -1,7 +1,7 @@
 ## [UNRELEASED]
 ### Added
 - GamiJa R36S (Batocera clone) groundwork, tracked in [issue #99](https://github.com/CodeZombie/goodluckOS/issues/99):
-  - Firmware builder now probes GamiJa script.bin offsets (20488192) and scans unknown dumps, produces the correct script.bin hash, generates a bit-for-bit layout report (MBR/GPT, eGON/ANDROID! markers), and refuses to assemble images for layouts it cannot flash safely.
+  - Firmware builder is fully layout-aware: per-layout script.bin probes (GamiJa at byte 20488192) with dump-wide scan fallback, per-layout merge/kernel offset (GA36-MB stays sector 172032; GamiJa is auto-detected from "ANDROID!" headers and reported as a suggested GAMINJA_KERNEL_SECTOR), base-image validation against the stock card's offset, and a downloadable layout report (MBR/GPT, eGON/ANDROID! markers). It still refuses to assemble images for unverified/unknown layouts.
   - `image/tools/analyze-gaminja-dump.py`: offline stock-dump analyzer (partitions, bootloader markers, script.bin candidates + extraction).
   - GamiJa A33 DTB baselines (panel1/panel2 variants, screen model unknown) + upstream NV3051D panel driver enabled (`gaminja-r36s.dtsi`, `kernel/Dockerfile`).
   - Boot offset-aware base images: `image/Dockerfile` gained `BOOT_SECTOR`; GamiJa variants build only when `GAMINJA_KERNEL_SECTOR` is set to a verified offset.

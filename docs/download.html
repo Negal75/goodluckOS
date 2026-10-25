@@ -362,12 +362,17 @@
         <p>Be sure you download the correct version for your hardware. A33 builds are NOT compatible with A23 hardware and vice versa.</p>
     </div>
     <div class="row">
-        <a class="download button fullwidth" :href="latestImageUrl" x-text="'Download ' + desiredGoodluckBaseImageFileName + '_' + panelType + '.zip'"></a>
+        <a class="download button fullwidth" :class="{'disabled': !baseImageAvailable}" :href="latestImageUrl" x-text="'Download ' + desiredGoodluckBaseImageFileName + '_' + panelType + '.zip'"></a>
         <select class="button secondary" x-model="panelType">
             <option value="panel1" selected>Panel 1</option>
             <option value="panel2">Panel 2</option>
         </select>
     </div>
+    <p class="smaller-text" x-show="variant && layoutName && layoutName !== 'ga36mb' && !baseImageAvailable">
+        This base image is not published yet. Build it locally from source with
+        <span class="code">GAMINJA_KERNEL_SECTOR=&lt;measured sector&gt; ./image/build.sh</span>
+        (see docs/gaminja-r36s.md and issue #99).
+    </p>
     <div class="fullwidth">
         <svg class="svg-icon disabled" width="32" viewBox="0 0 32 32" xml:space="preserve">
         <line style="fill:none;stroke:#fff;stroke-width:2;stroke-miterlimit:10;" x1="16" y1="32" x2="16" y2="0"/>
@@ -421,19 +426,30 @@ const createLog = () => ({
 const CONFIG = {
   SECTOR: 512,
 
-  // The stock SD card supplies sectors [1, STOCK_END_SECTOR). goodluck.img
-  // supplies sector 0 (MBR) and everything from STOCK_END_SECTOR onward,
-  // which is where android_boot.img starts.
-  STOCK_END_SECTOR: 172032,
-
-  // Where the baked-in script.bin lives on the stock card, and how much to look at.
-  // Different firmware families use different bootloader layouts, so keep a
-  // probe list per layout and use whichever offset parses (see issue #99).
-  SCRIPT_BIN_OFFSET: 20340736,
-  SCRIPT_BIN_OFFSETS: {
-    ga36mb:  [20340736],  // GA36-MB stock (Android-style firmware)
-    gaminja: [20488192]   // GamiJa R36S / Batocera clones (issue #99)
+  // Known stock firmware layout families. Each entry describes how the stock
+  // bootloader is arranged on the card so the builder can splice goodluckOS
+  // on top of it. See docs/gaminja-r36s.md and issue #99.
+  LAYOUTS: {
+    ga36mb: {
+      name: "GA36-MB stock",
+      // Where the baked-in script.bin lives on the stock card.
+      scriptBinOffsets: [20340736],
+      // The stock bootloader loads goodluckOS' kernel from this sector;
+      // it is also the merge boundary (stock sectors [1, kernelSector)).
+      kernelSector: 172032
+    },
+    gaminja: {
+      name: "GamiJa R36S / Batocera clones",
+      scriptBinOffsets: [20488192],
+      // NOT measured yet: the stock Batocera-style bootloader loads the
+      // kernel from a different offset. The builder finds candidate kernel
+      // images in the dump ("ANDROID!" headers) and suggests the sector,
+      // but builds for this layout stay blocked until the maintainer has
+      // verified both the layout and the script.bin hash (issue #99).
+      kernelSector: null
+    }
   },
+
   SCRIPT_BIN_MAX_LENGTH: 131072,
 
   // How far into the dump we're willing to scan when probing for script.bin
@@ -446,6 +462,10 @@ const CONFIG = {
     "a23_panel1": "https://github.com/CodeZombie/goodluckOS/releases/download/0.1.0/goodluck_base_a23_panel1.zip",
     "a33_panel2": "https://github.com/CodeZombie/goodluckOS/releases/download/0.1.0/goodluck_base_a33_panel2.zip",
     "a23_panel2": "https://github.com/CodeZombie/goodluckOS/releases/download/0.1.0/goodluck_base_a23_panel2.zip"
+    // GamiJa base images are built locally via image/build.sh until the
+    // stock layout has been verified and published (docs/gaminja-r36s.md):
+    // "gaminja_a33_panel1": "<published after layout verification>",
+    // "gaminja_a33_panel2": "<published after layout verification>"
   },
 
   // Script.bin hashes you have personally approved.
@@ -605,7 +625,9 @@ async function describePartitionTable(file) {
 }
 
 /** Marker strings that identify bootloader/kernel images inside a dump.
- *  Sector-aligned so offsets can be turned straight into dd commands. */
+ *  Sector-aligned so offsets can be turned straight into dd commands.
+ *  Returns { lines, androidOffsets } where androidOffsets are the raw byte
+ *  offsets of every "ANDROID!" header in the scanned region. */
 async function scanBootMarkers(file, limitBytes) {
   const MARKERS = [
     { name: "boot0 (eGON.BT0)", bytes: "eGON.BT0" },
@@ -631,12 +653,16 @@ async function scanBootMarkers(file, limitBytes) {
     }
   }
 
+  let androidOffsets = [];
   for (const m of MARKERS) {
     if (m.hits > 0) {
       hits.push(`${m.name}: ${m.hits} hit(s) at bytes [${m.offsets.join(", ")}${m.hits > 12 ? ", ..." : ""}]`);
+      if (m.bytes === "ANDROID!") {
+        androidOffsets = m.offsets.slice();
+      }
     }
   }
-  return hits;
+  return { lines: hits, androidOffsets };
 }
 
 function viewSigMatches(view, offset, bytes) {
@@ -698,6 +724,7 @@ document.addEventListener("alpine:init", () => {
     layoutName: null,   // ga36mb | gaminja | unknown
     layoutReport: null, // downloadable text report for unrecognized layouts
     buildable: false,   // false for layouts we don't know how to flash safely
+    kernelSector: null, // where goodluckOS' boot image must land (per layout, or detected)
     step1Complete: false,
     step2Complete: false,
     output: null,       // { url, name, label } once built
@@ -706,18 +733,31 @@ document.addEventListener("alpine:init", () => {
     panelType: "panel1",
 
     get latestImageUrl() {
-      if (!this.variant) {
+      if (this.baseImageKey === null) {
         return ""
       }
-      console.log(this.variant.soc.toLowerCase() + '_' + this.panelType.toLowerCase())
-      return CONFIG.GOODLUCK_BASE_IMAGE_URLS[this.variant.soc.toLowerCase() + '_' + this.panelType.toLowerCase()];
+      return CONFIG.GOODLUCK_BASE_IMAGE_URLS[this.baseImageKey] || "#";
     },
 
     get desiredGoodluckBaseImageFileName() {
-      if (!this.variant) {
+      if (this.baseImageKey === null) {
         return "goodluckOS_base_???"
       }
-      return `goodluckOS_base_${this.variant.soc.toLowerCase()}`
+      return `goodluckOS_base_${this.baseImageKey}`
+    },
+
+	get baseImageKey() {
+      if (!this.variant) {
+        return null;
+      }
+      // GamiJa-family layouts need their own base images (built with a
+      // verified kernel offset; docs/gaminja-r36s.md), not the GA36 ones.
+      const layoutPrefix = this.layoutName === "ga36mb" ? "" : this.layoutName + "_";
+      return layoutPrefix + this.variant.soc.toLowerCase() + "_" + this.panelType.toLowerCase();
+    },
+
+    get baseImageAvailable() {
+      return this.baseImageKey !== null && !!CONFIG.GOODLUCK_BASE_IMAGE_URLS[this.baseImageKey];
     },
 
     /* ---- derived state ---- */
@@ -743,6 +783,7 @@ document.addEventListener("alpine:init", () => {
       this.layoutName = null;
       this.layoutReport = null;
       this.buildable = false;
+      this.kernelSector = null;
       this.variant = null;
 
 
@@ -782,9 +823,19 @@ document.addEventListener("alpine:init", () => {
 
     /* ---- verification ---- */
     async checkStock(file) {
-      const stockEnd = CONFIG.STOCK_END_SECTOR * CONFIG.SECTOR;
-      if (file.size < stockEnd) {
-        this.step1Logs.addLine(`Stock dump is ${file.size} bytes; need at least ${stockEnd}.`, "bad");
+      // Layouts, and the kernel offsets we detect, must respect the bounds
+      // enforced by image/Dockerfile: past the head of the card, below
+      // the 128 MiB linux partition.
+      const MIN_KERNEL_SECTOR = 1025;
+      const MAX_KERNEL_SECTOR = 262143;
+
+      // Stock dumps are checked against the largest known layout's kernel
+      // sector; a short dump can't hold any known bootloader.
+      const widestStockEnd = Math.max(
+        ...Object.values(CONFIG.LAYOUTS).map(l => l.kernelSector ?? 0)
+      ) * CONFIG.SECTOR;
+      if (file.size < widestStockEnd) {
+        this.step1Logs.addLine(`Stock dump is ${file.size} bytes; need at least ${widestStockEnd}.`, "bad");
         return;
       }
 
@@ -793,10 +844,11 @@ document.addEventListener("alpine:init", () => {
       this.layoutName = null;
       this.layoutReport = null;
       this.buildable = false;
+      this.kernelSector = null;
 
       // 1) Probe the known layout offsets.
       const probeOffsets = [...new Set(
-        Object.values(CONFIG.SCRIPT_BIN_OFFSETS).flat()
+        Object.values(CONFIG.LAYOUTS).flatMap(l => l.scriptBinOffsets)
       )].sort((a, b) => a - b);
 
       let parsed = null;
@@ -816,10 +868,10 @@ document.addEventListener("alpine:init", () => {
         }
       }
 
-      // 2) Fall back to scanning the stock region for any valid script.bin.
+      // 2) Fall back to scanning for any valid script.bin.
       if (!parsed) {
         this.step1Logs.addLine("Probing dump for script.bin at an unrecognized layout...", "");
-        const scanLimit = Math.min(file.size, CONFIG.SCAN_LIMIT_BYTES, stockEnd);
+        const scanLimit = Math.min(file.size, CONFIG.SCAN_LIMIT_BYTES, widestStockEnd);
         const candidates = await findScriptBinCandidates(file, scanLimit);
         for (const cand of candidates) {
           const region = await file.slice(cand.offset, cand.offset + CONFIG.SCRIPT_BIN_MAX_LENGTH).arrayBuffer();
@@ -838,14 +890,13 @@ document.addEventListener("alpine:init", () => {
         }
       }
 
-      // 3) Classify the layout.
+      // 3) Classify the layout and resolve where goodluckOS' kernel must go.
       if (parsed) {
         this.scriptOffset = parsed.offset;
         this.layoutName = "unknown";
-        for (const [name, offs] of Object.entries(CONFIG.SCRIPT_BIN_OFFSETS)) {
-          if (offs.includes(parsed.offset)) this.layoutName = name;
+        for (const [name, layout] of Object.entries(CONFIG.LAYOUTS)) {
+          if (layout.scriptBinOffsets.includes(parsed.offset)) this.layoutName = name;
         }
-        this.buildable = this.layoutName === "ga36mb";
         this.step1Logs.addLine("Stock layout family: " + this.layoutName, this.layoutName === "ga36mb" ? "ok" : "bad");
         this.step1Logs.addLine("script.bin SHA-256: " + (await sha256Hex(parsed.region)), "");
 
@@ -855,6 +906,27 @@ document.addEventListener("alpine:init", () => {
         this.scriptBlob = new Blob([bytes], { type: "application/octet-stream" });
         const hash = await sha256Hex(bytes);
 
+        // Known sector from the layout table, else detect it from the dump.
+        const layout = this.layoutName === "unknown" ? null : CONFIG.LAYOUTS[this.layoutName];
+        if (layout && layout.kernelSector !== null) {
+          this.kernelSector = layout.kernelSector;
+        } else if (layout) {
+          const scan = await scanBootMarkers(file, widestStockEnd);
+          const boundsOk = o => o / CONFIG.SECTOR >= MIN_KERNEL_SECTOR && o / CONFIG.SECTOR <= MAX_KERNEL_SECTOR;
+          const candidates = scan.androidOffsets.filter(boundsOk);
+          if (candidates.length > 0) {
+            const sector = Math.floor(candidates[0] / CONFIG.SECTOR);
+            this.kernelSector = sector;
+            this.step1Logs.addLine(`Stock kernel image found at sector ${sector} (${(candidates[0] / 1048576).toFixed(2)} MiB) - this is the likely ${layout.name} boot offset.`, "");
+            if (scan.androidOffsets.length > 1) {
+              this.step1Logs.addLine(`Other ANDROID! headers found at sectors ${scan.androidOffsets.slice(1).map(o => Math.floor(o / CONFIG.SECTOR)).join(", ")}; if sector ${sector} does not boot, try them one at a time.`, "");
+            }
+            this.step1Logs.addLine(`For local test builds: GAMINJA_KERNEL_SECTOR=${sector} ./image/build.sh`, "");
+          } else {
+            this.step1Logs.addLine("No usable kernel image (ANDROID! header) found in the scanned region; offset detection failed.", "bad");
+          }
+        }
+
         const match = CONFIG.KNOWN_HASHES[hash];
         if (match) {
           this.variant = match;
@@ -862,6 +934,7 @@ document.addEventListener("alpine:init", () => {
             this.step1Complete = true;
             this.step1Logs.addLine("Approved variant: " + match.name, "ok");
             this.step1Logs.addLine("Variant SoC: " + match.soc, "ok");
+            this.buildable = this.kernelSector !== null;
           } else {
             if (this.allowUnsupportedVariant) {
               this.step1Complete = true;
@@ -890,7 +963,7 @@ document.addEventListener("alpine:init", () => {
           this.step1Logs.addLine("Please download your script.bin and the layout report, and attach both to:", "bad");
           this.step1Logs.addLine("https://github.com/CodeZombie/goodluckOS/issues/99", "link");
           this.step1Logs.addLine("With that data we can map this layout and add proper support.", "ok");
-          await this.generateLayoutReport(file, stockEnd);
+          await this.generateLayoutReport(file, widestStockEnd);
         }
       } else {
         this.step1Logs.addLine("Nothing recognized in this dump. Please open an issue at:", "bad");
@@ -912,18 +985,26 @@ document.addEventListener("alpine:init", () => {
 
       lines.push("");
       lines.push("-- Bootloader/kernel markers (sector-aligned, first " + Math.min(file.size, stockEnd) + " bytes) --");
-      const markers = await scanBootMarkers(file, Math.min(file.size, stockEnd));
-      lines.push(...(markers.length > 0 ? markers : ["No eGON.BT0 / eGON / ANDROID! markers found."]));
+      const scan = await scanBootMarkers(file, Math.min(file.size, stockEnd));
+      lines.push(...(scan.lines.length > 0 ? scan.lines : ["No eGON.BT0 / eGON / ANDROID! markers found."]));
 
       lines.push("");
-      lines.push("-- script.bin probes --");
-      for (const [name, offs] of Object.entries(CONFIG.SCRIPT_BIN_OFFSETS)) {
-        lines.push(`${name}: candidate offsets ${offs.join(", ")}`);
+      lines.push("-- script.bin probes (per known layout family) --");
+      for (const [name, layout] of Object.entries(CONFIG.LAYOUTS)) {
+        lines.push(`${name}: script.bin at ${layout.scriptBinOffsets.join(", ")}; kernel sector ${layout.kernelSector === null ? "(not yet measured - issue #99)" : layout.kernelSector}`);
       }
       if (this.scriptOffset !== null) {
         lines.push(`script.bin used by this tool: byte offset ${this.scriptOffset} (sector ${this.scriptOffset / CONFIG.SECTOR})`);
         lines.push(`  SHA-256: ${await sha256Hex(this.scriptBlob ? await this.scriptBlob.arrayBuffer() : new ArrayBuffer(0))}`);
         lines.push("  Convert to a .fex for inspection with: sunxi-fexc -u script.bin script.fex");
+      }
+      if (this.kernelSector !== null) {
+        lines.push("");
+        const prefix = this.layoutName === "ga36mb" ? "" : `${this.layoutName.toUpperCase()}_KERNEL_SECTOR`;
+        lines.push(`Resolved goodluckOS boot image location: sector ${this.kernelSector} (${(this.kernelSector * CONFIG.SECTOR / 1048576).toFixed(2)} MiB)`);
+        if (prefix) {
+          lines.push(`Local test build command: ${prefix}=${this.kernelSector} ./image/build.sh`);
+        }
       }
 
       this.layoutReport = lines.join("\n") + "\n";
@@ -939,7 +1020,13 @@ document.addEventListener("alpine:init", () => {
     },
 
     async checkBase(file) {
-      const kernelOffset = CONFIG.STOCK_END_SECTOR * CONFIG.SECTOR;
+      // The base image must carry goodluckOS' boot image at the exact spot
+      // this stock card's bootloader expects it.
+      if (this.kernelSector === null) {
+        this.step2Logs.addLine("ERROR: Cannot validate a base image until the stock kernel offset is known for this dump. Load the stock dump in step 1 first.", "bad");
+        return;
+      }
+      const kernelOffset = this.kernelSector * CONFIG.SECTOR;
       if (file.size <= kernelOffset) {
         this.step2Logs.addLine(`ERROR: Provided file is too small to be a valid goodluckOS base image.`, "bad");
         return;
@@ -947,11 +1034,12 @@ document.addEventListener("alpine:init", () => {
       const header = await file.slice(kernelOffset, kernelOffset + 8).arrayBuffer();
       const magic = new TextDecoder().decode(header);
       if (magic !== "ANDROID!") {
-        this.step2Logs.addLine(`ERROR: The provided file is not a goodluckOS base image because no ANDROID! boot image header was found at sector ${CONFIG.STOCK_END_SECTOR}.`, "bad");
+        this.step2Logs.addLine(`ERROR: This base image does not line up with your stock card: no ANDROID! boot image header was found at sector ${this.kernelSector}.`, "bad");
+        this.step2Logs.addLine(`This base image was probably built for another layout/offset. Check docs/gaminja-r36s.md and issue #99.`, "bad");
         return;
       }
       this.step2Complete = true;
-      this.step2Logs.addLine(`${file.name} OK (${(file.size / 1048576).toFixed(0)} MiB, boot image header found)`, "ok");
+      this.step2Logs.addLine(`${file.name} OK (${(file.size / 1048576).toFixed(0)} MiB, boot image header found at sector ${this.kernelSector})`, "ok");
 
       this.build();
     },
@@ -967,18 +1055,28 @@ document.addEventListener("alpine:init", () => {
     },
 
     build() {
-      if (this.layoutName !== null && this.layoutName !== "ga36mb") {
-        this.step2Logs.addLine("[Build] This stock card uses a non-GA36-MB bootloader layout; building is disabled to protect your device. See issue #99.", "bad");
+      const { SECTOR } = CONFIG;
+      const kernelSector = this.kernelSector;
+
+      if (kernelSector === null) {
+        this.step2Logs.addLine("[Build] The boot image offset for this stock layout is unknown; building is disabled to protect your device. See issue #99.", "bad");
         return;
       }
-      const { SECTOR, STOCK_END_SECTOR } = CONFIG;
-      const stockEnd = STOCK_END_SECTOR * SECTOR;
+      if (this.layoutName === "gaminja" && (!this.variant || !this.variant.supported)) {
+        this.step2Logs.addLine("[Build] The GamiJa layout is not verified yet (script.bin not whitelisted); building is disabled. See issue #99.", "bad");
+        return;
+      }
+      if (kernelSector < 1025 || kernelSector > 262143) {
+        this.step2Logs.addLine(`[Build] Unusable boot image sector ${kernelSector}: must land below the 128 MiB linux partition (mirror of image/Dockerfile's guard).`, "bad");
+        return;
+      }
+      const stockEnd = kernelSector * SECTOR;
 
       let startSector = SECTOR;
-      this.step2Logs.addLine(`[Build] Building image...`, "");
+      this.step2Logs.addLine(`[Build] Building image (boot image at sector ${kernelSector})...`, "");
 
 
-      // Layout: [goodluck sector 0][stock sectors 1..N-1][goodluck from sector N onward]
+      // Layout: [goodluck sector 0][stock sectors 1..kernelSector-1][goodluck from kernelSector onward]
       const image = new Blob([
         this.baseFile.slice(0, startSector),
         this.stockFile.slice(startSector, stockEnd),

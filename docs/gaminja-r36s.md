@@ -12,6 +12,7 @@ item lands or gets disproven.
 | Step | Status |
 | --- | --- |
 | Firmware builder recognizes the GamiJa stock layout (script.bin probe + scan + layout report) | **done** (docs/download.html) |
+| Builder auto-detects the stock kernel offset ("ANDROID!" scan) and logs the suggested `GAMINJA_KERNEL_SECTOR` | **done** (unverified vs real dumps) |
 | Dump analysis tooling | **done** (image/tools/analyze-gaminja-dump.py) |
 | NV3051D panel wired into the kernel build | **done** (untested, no hw) |
 | GamiJa A33 DTB baseline (panel1 + panel2 variants) | **done** (untested, no hw) |
@@ -53,8 +54,21 @@ item lands or gets disproven.
 
 Step 1 now probes *all* known layout offsets (GA36-MB and GamiJa) for a
 valid `script.bin`, then — if none parse — scans the stock region for any
-valid script.bin blob. For unrecognized layouts it disables image assembly
-(refuses to build, to protect your hardware) and offers two downloads:
+valid script.bin blob. The builder is fully layout-aware:
+
+- The merge boundary (where the stock bootloader hands over to goodluckOS'
+  kernel) comes from the layout table; GA36-MB is sector 172032, GamiJa is
+  auto-detected from the first in-bounds `ANDROID!` boot-image header in
+  the dump and printed as a suggested `GAMINJA_KERNEL_SECTOR`.
+- `KNOWN_HASHES` is layout-agnostic: the moment a GamiJa script.bin hash is
+  whitelisted (and its base images are published or built locally with the
+  measured sector), the builder unlocks for that layout — no further code
+  changes needed.
+- Base images are validated against the *stock* card's kernel offset before
+  assembling, so a mismatched GA36/GamiJa base cannot be spliced onto the
+  wrong card.
+- For unrecognized layouts it disables image assembly (refuses to build,
+  to protect your hardware) and offers two downloads:
 
 - **your script.bin** — the correctly extracted, hash-verified blob. This
   is what gets whitelisted in `KNOWN_HASHES`.
