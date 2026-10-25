@@ -8,3 +8,5 @@ image/staging/*
 rootfs/package/*/local-out/*
 rootfs/package/*/imgui
 rootfs/package/puppy/puppy
+__pycache__/
+*.pyc
