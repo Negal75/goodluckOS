@@ -845,6 +845,7 @@ document.addEventListener("alpine:init", () => {
         for (const [name, offs] of Object.entries(CONFIG.SCRIPT_BIN_OFFSETS)) {
           if (offs.includes(parsed.offset)) this.layoutName = name;
         }
+        this.buildable = this.layoutName === "ga36mb";
         this.step1Logs.addLine("Stock layout family: " + this.layoutName, this.layoutName === "ga36mb" ? "ok" : "bad");
         this.step1Logs.addLine("script.bin SHA-256: " + (await sha256Hex(parsed.region)), "");
 
