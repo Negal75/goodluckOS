@@ -12,17 +12,20 @@ item lands or gets disproven.
 | Step | Status |
 | --- | --- |
 | Firmware builder recognizes the GamiJa stock layout (script.bin probe + scan + layout report) | **done** (docs/download.html) |
-| Builder auto-detects the stock kernel offset ("ANDROID!" scan) and logs the suggested `GAMINJA_KERNEL_SECTOR` | **done** (unverified vs real dumps) |
 | Dump analysis tooling | **done** (image/tools/analyze-gaminja-dump.py) |
 | Single-file blob identifier (magic.bin, boot.scr, ...) | **done** (image/tools/identify-file.py) |
+| script.bin → .fex decoder (offline) | **done** (image/tools/scriptbin2fex.py) |
+| Stock layout mapped from a real dump (GPT, boot flow, magic.bin) | **done** — docs/r36s-stock-layout.md |
+| Stock bootloader's kernel source | **done** — loads `uImage` from FAT partition p3 (`boot`), **not** a fixed sector |
 | NV3051D panel wired into the kernel build | **done** (untested, no hw) |
+| Panel identity | **done** — script.bin: `nv3051`, 640x480, 4-lane DSI, **eotp=0 → panel1 variant** |
 | GamiJa A33 DTB baseline (panel1 + panel2 variants) | **done** (untested, no hw) |
-| Kernel/boot offset of GamiJa stock firmware | **open** — needs a mapped stock dump |
-| Matches no approved script.bin hash yet | **open** — extract + whitelist |
-| Which NV3051D panel variant (panel1 vs panel2) | **open** — try both on hw |
-| Gamepad GPIOs / analog-stick MCU | **open** — PCB differs from GA36-MB |
-| Audio path (speaker pin, jack return) | **open** |
-| GamiJa base images (BOOT_SECTOR-aware) | **done, gated** (`GAMINJA_KERNEL_SECTOR`) |
+| Analog stick mechanism | **done** — `adc_gamepad`, 4 GPADC muxes (ch. 4/5/6/7), no MCU |
+| Gamepad buttons | **done (map)** — 19 gpio-keys: 114/115 + BTN_TRIGGER_HAPPY set; GPIO pin numbers need a second look |
+| Kernel/boot offset of GamiJa stock firmware | **obsolete** — boot is FAT-file based; merge model doesn't apply (docs/r36s-stock-layout.md §3) |
+| Matches no approved script.bin hash yet | **hash measured**: `1b78d3d5...1b2193` — await whitelist |
+| GamiJa install mechanism (swap p3/uImage + rootfs repurpose) | **open** — replaces the offset-merge builder for this layout |
+| DTB GPIOs vs real PCB | **open** — gamepad pins, LEDs, audio PA pin |
 | Verified flash on real hardware | **not started** |
 
 ## What we know (from issue #99)
@@ -152,6 +155,29 @@ shows the kernel being loaded *from a file on the FAT partition*, the
 fixed-offset merge model (and `GAMINJA_KERNEL_SECTOR`) may be the wrong
 approach entirely for these units, and support would instead mean
 replacing that file — a much simpler and safer flashing path.
+
+## Real-dump findings (measured — docs/r36s-stock-layout.md)
+
+A device-owner dump has been fully analysed; see
+[docs/r36s-stock-layout.md](r36s-stock-layout.md) for the full report.
+Headlines:
+
+- GPT layout, 7 labelled partitions; stock kernel is **OpenWrt Linux
+  3.4.39** loaded by stock u-boot via **`fatload` from FAT partition
+  `boot` (p3)** — a file-based boot, not a fixed sector.
+- script.bin confirmed at byte 20488192, SHA-256
+  `1b78d3d5…1b2193`; decoded with `scriptbin2fex.py`: panel =
+  **nv3051 640x480 4-lane DSI with eotp=0 (→ the panel1/rg351v
+  variant)**, analog = **ADC (`adc_gamepad`, GPADC ch. 4/5/6/7)**,
+  buttons = 19 gpio-keys, PMU on i2c1 @ 0x34, machine name `parrot`.
+- `magic.bin` = 512-byte ASCII GUID marker blob in `boot-res`; not boot
+  data.
+
+This **changes the install model**: for GamiJa cards the fixed-offset
+merge flow cannot work. An install instead keeps stock boot0/u-boot +
+script.bin and swaps the p3 `uImage` (+ `uInitrd`) file for a goodluckOS
+mainline-kernel uImage (appended-DTB build), repurposing p4/p5 for the
+rootfs. The DTB/panel/driver work carries over unchanged.
 
 ## magic.bin workflow (device owner with the stock card)
 

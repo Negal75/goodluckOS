@@ -127,8 +127,8 @@ def script_bin_sections(buf: bytes) -> list:
 
 
 # ------------------------------------------------------------------- uImage
-UIMG_TYPES = {1: "Standalone", 2: "Kernel", 5: "RAMDisk", 6: "Multi-File",
-              7: "Firmware", 8: "Script", 9: "Filesystem"}
+UIMG_TYPES = {1: "Standalone", 2: "Kernel", 3: "RAMDisk", 4: "Multi-File",
+              5: "Firmware", 6: "Script", 7: "Filesystem", 8: "FlatDT"}
 UIMG_OS = {0: "Invalid", 5: "Linux", 17: "OpenRTOS"}
 UIMG_COMP = {0: "none", 1: "gzip", 2: "bzip2", 3: "lzma", 4: "lzo", 5: "lz4"}
 

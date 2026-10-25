@@ -10,3 +10,6 @@ rootfs/package/*/imgui
 rootfs/package/puppy/puppy
 __pycache__/
 *.pyc
+
+# raw stock-card dumps stay out of git
+disk/
