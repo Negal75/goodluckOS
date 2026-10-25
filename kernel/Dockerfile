@@ -4,7 +4,7 @@ FROM debian:bookworm-slim AS kernel_builder
 RUN apt-get update && apt-get install -y \
     build-essential gcc-arm-linux-gnueabihf binutils-arm-linux-gnueabihf \
     bc bison flex libssl-dev make libc6-dev libncurses5-dev \
-    git wget cpio kmod rsync device-tree-compiler mkbootimg \
+    git wget cpio kmod rsync device-tree-compiler mkbootimg u-boot-tools \
     && rm -rf /var/lib/apt/lists/*
 
 ENV ARCH=arm
@@ -214,35 +214,36 @@ RUN mkbootimg \
     --pagesize 2048 \
     -o /src/android_boot_a33_panel2.img
 
-# GamiJa R36S boot images (issue #99). NOTE: a full GamiJa build also needs
-# matching base images flashed at the GamiJa kernel offset - see
-# image/Dockerfile (BOOT_SECTOR) and docs/gaminja-r36s.md.
+# GamiJa R36S boot payload (issue #99, measured boot flow). The stock
+# GamiJa u-boot loads the kernel from a FILE, not a fixed sector:
+#   boot_normal=fatload sunxi_flash boot 40007fc0 uImage; \
+#               fatload sunxi_flash boot 48000000 uInitrd; \
+#               bootm 40007fc0 48000000
+# So ship a legacy u-boot uImage wrapping the appended-DTB zImage (this
+# u-boot's `bootm` passes no DTB, hence the appended one; ATAG bootargs
+# from the env partition reach the kernel via CONFIG_ARM_ATAG_DTB_COMPAT).
+# Load/entry 0x40008000 matches the stock env; the installer fatloads the
+# uImage to 0x40007fc0 so the header sits 0x40 below, like stock.
 RUN cat arch/arm/boot/zImage arch/arm/boot/dts/allwinner/gaminja-r36s-a33-panel1.dtb > arch/arm/boot/zImage_with_dtb_gaminja_a33_panel1
 RUN cat arch/arm/boot/zImage arch/arm/boot/dts/allwinner/gaminja-r36s-a33-panel2.dtb > arch/arm/boot/zImage_with_dtb_gaminja_a33_panel2
 
-RUN mkbootimg \
-    --kernel arch/arm/boot/zImage_with_dtb_gaminja_a33_panel1 \
-    --ramdisk empty_ramdisk \
-    --base 0x40000000 \
-    --board sun8i \
-    --pagesize 2048 \
-    -o /src/android_boot_gaminja_a33_panel1.img
+RUN mkimage -A arm -O linux -T kernel -C none -a 0x40008000 -e 0x40008000 \
+    -n "goodluckOS_gaminja_p1" \
+    -d arch/arm/boot/zImage_with_dtb_gaminja_a33_panel1 \
+    /src/uImage_gaminja_a33_panel1
 
-RUN mkbootimg \
-    --kernel arch/arm/boot/zImage_with_dtb_gaminja_a33_panel2 \
-    --ramdisk empty_ramdisk \
-    --base 0x40000000 \
-    --board sun8i \
-    --pagesize 2048 \
-    -o /src/android_boot_gaminja_a33_panel2.img
+RUN mkimage -A arm -O linux -T kernel -C none -a 0x40008000 -e 0x40008000 \
+    -n "goodluckOS_gaminja_p2" \
+    -d arch/arm/boot/zImage_with_dtb_gaminja_a33_panel2 \
+    /src/uImage_gaminja_a33_panel2
 
 FROM scratch AS artifacts
 COPY --from=kernel_builder /src/android_boot_a23_panel1.img ./android_boot_a23_panel1.img
 COPY --from=kernel_builder /src/android_boot_a23_panel2.img ./android_boot_a23_panel2.img
 COPY --from=kernel_builder /src/android_boot_a33_panel1.img ./android_boot_a33_panel1.img
 COPY --from=kernel_builder /src/android_boot_a33_panel2.img ./android_boot_a33_panel2.img
-COPY --from=kernel_builder /src/android_boot_gaminja_a33_panel1.img ./android_boot_gaminja_a33_panel1.img
-COPY --from=kernel_builder /src/android_boot_gaminja_a33_panel2.img ./android_boot_gaminja_a33_panel2.img
+COPY --from=kernel_builder /src/uImage_gaminja_a33_panel1 ./uImage_gaminja_a33_panel1
+COPY --from=kernel_builder /src/uImage_gaminja_a33_panel2 ./uImage_gaminja_a33_panel2
 COPY --from=kernel_builder /src/linux/arch/arm/boot/dts/allwinner/ga36mb-a23-panel1.dtb ./dtb/ga36mb-a23-panel1.dtb
 COPY --from=kernel_builder /src/linux/arch/arm/boot/dts/allwinner/ga36mb-a23-panel2.dtb ./dtb/ga36mb-a23-panel2.dtb
 COPY --from=kernel_builder /src/linux/arch/arm/boot/dts/allwinner/ga36mb-a33-panel1.dtb ./dtb/ga36mb-a33-panel1.dtb

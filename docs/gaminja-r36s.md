@@ -24,7 +24,8 @@ item lands or gets disproven.
 | Gamepad buttons | **done (map)** — 19 gpio-keys: 114/115 + BTN_TRIGGER_HAPPY set; GPIO pin numbers need a second look |
 | Kernel/boot offset of GamiJa stock firmware | **obsolete** — boot is FAT-file based; merge model doesn't apply (docs/r36s-stock-layout.md §3) |
 | Matches no approved script.bin hash yet | **hash measured**: `1b78d3d5...1b2193` — await whitelist |
-| GamiJa install mechanism (swap p3/uImage + rootfs repurpose) | **open** — replaces the offset-merge builder for this layout |
+| GamiJa install mechanism (swap p3/uImage + env rewrite + rootfs) | **done (tooling)** — image/tools/install-gaminja.py, 15 regression tests |
+| Kernel uImage payload (appended-DTB, load 0x40008000) | **done (build)** — kernel/Dockerfile emits `uImage_gaminja_a33_panel1/2` |
 | DTB GPIOs vs real PCB | **open** — gamepad pins, LEDs, audio PA pin |
 | Verified flash on real hardware | **not started** |
 
@@ -222,10 +223,12 @@ What each result means for the port plan:
 2. **Whitelist the script.bin.** Extract via builder or analyzer, compute
    SHA-256, add an entry to `KNOWN_HASHES` in docs/download.html, and (with
    hardware on hand) mark `supported: true`.
-3. **Build + flash a test image.** Kernel first via
-   `dd if=android_boot_gaminja_a33_panel1.img bs=512 seek=<measured sector> of=/dev/sdX
-   conv=notrunc` onto the untouched stock card, watching the serial console
-   (`USB TTY`). Try `panel2` if the display stays black.
+3. **Install + flash a test image** (file-swap model, docs/r36s-stock-layout.md §7):
+   build `uImage_gaminja_a33_panel1` (kernel/Dockerfile), run
+   `image/tools/install-gaminja.py` against a COPY of the stock card
+   (script.bin gate + automatic stock backup first), then write the copy
+   to the card and boot watching serial (`ttyS0`, 115200, USB TTY). Try
+   `panel2` if the display stays black.
 4. **Fix the DTB against reality**: panel picked (panel1 vs panel2),
    gamepad GPIOs + analog MCU protocol, LEDs, LRADC volume keys, audio.
 5. **Full image + firmware-builder release once stable.**

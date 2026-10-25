@@ -137,7 +137,52 @@ PC never enumerates even at the electrical level (`lsusb`/`dmesg`
 silent). Suspected half-wired USB-C (CC pins) on the console; not a
 blocker — the SD-card-reader route works.
 
-## 6. Artifacts (kept out of git in `image/out/r36s-analysis/`)
+## 7. Installing goodluckOS (file-swap install)
+
+`image/tools/install-gaminja.py` implements the install. Run it on a COPY
+of the card image first (or the card itself, only with a separate backup):
+
+```bash
+# 1. build the kernel payload (uImage with appended DTB):
+docker buildx build --output type=local,dest=kernel/out ./kernel
+#    -> kernel/out/uImage_gaminja_a33_panel1 (and _panel2)
+
+# 2. inspect (plan mode, read-only):
+./image/tools/install-gaminja.py --target stock-card-copy.img
+
+# 3. install panel1 kernel (retry with panel2 if the screen stays black):
+./image/tools/install-gaminja.py --target stock-card-copy.img \
+    --uimage kernel/out/uImage_gaminja_a33_panel1 \
+    --rootfs-file rootfs/out/images/goodluck_rootfs.img \
+    --rootfs-part rootfs --write
+```
+
+What it does:
+
+1. **Identity gate** — verifies the card's script.bin at byte 20488192
+   against the pinned hash; refuses any other card/revision.
+2. **Backs up** the stock p3 `uImage`/`uInitrd` (with SHA-256s) to
+   `<target-dir>/gaminja-stock-backup/` before touching anything.
+3. **Swaps the boot file** — replaces p3 `uImage` with the goodluckOS
+   uImage (FAT12-aware cluster rewrite, byte-exact read-back verified),
+   deletes `uInitrd` (not needed; bootcmd drops it).
+4. **Rewrites the env partition** (CRC32-checked, u-boot format):
+   `bootcmd=fatload sunxi_flash boot 40007fc0 uImage; bootm 40007fc0`,
+   `bootargs=console=ttyS0,115200 root=<--root> rootwait rw panic=10`.
+   Default `--root` is `/dev/mmcblk0p5` (partition `rootfs`); use
+   `--rootfs-part emusystem --root /dev/mmcblk0p4` to target the 2.5 GiB
+   partition instead.
+5. Optionally writes the rootfs image into the target partition with a
+   capacity check.
+
+Recovery: restore the stock `uImage`/`uInitrd` from the backup dir onto
+any FAT-mounted copy of the card (e.g. `mcopy`), or re-flash the whole
+backup dump. stock env partition is overwritten — keep a full dump.
+
+Regression tests (fully synthetic card, no hardware/dump needed):
+`python3 tests/install-gaminja.test.py`.
+
+## 8. Artifacts (kept out of git in `image/out/r36s-analysis/`)
 
 - `layout_report.txt` — analyzer output
 - `script_20488192.bin` — extracted script.bin (attach to issue #99)
