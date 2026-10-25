@@ -1,0 +1,47 @@
+/*
+ * GamiJa R36S (Batocera clone) - shared device tree baseline
+ *
+ * Tracked in goodluckOS issue #99. The GamiJa units use an Allwinner SoC
+ * compatible with the GA36-MB family, but the PCB differs (unverified:
+ * button wiring, MCU/UART wiring, LED placement...). This dtsi therefore
+ * includes ga36mb.dtsi as a known-good starting point and makes only the
+ * changes we have evidence for. EVERY node marked TBD below must be
+ * verified against the unit's fex (sunxi-fexc script.bin -> .fex) and PCB
+ * photos before being trusted.
+ *
+ * Known so far (from issue #99):
+ *   - Stock layout differs from GA36-MB (script.bin at byte 20488192; see
+ *     image/tools/analyze-gaminja-dump.py).
+ *   - Display is an NV3051 on the examined units. Upstream Linux already
+ *     ships drivers/gpu/drm/panel/panel-newvision-nv3051d.c, so no
+ *     reverse-engineered .ko is needed. compatible strings today:
+ *       "anbernic,rg351v-panel" (640x480 3.5", multi-mode incl. 60 Hz)
+ *       "anbernic,rg353p-panel" / "powkiddy,rk2023-panel"
+ *     We start with rg351v-panel. If the panel blanks/eink issues show up,
+ *     try rg353p or fix the driver with a GamiJa-specific compatible.
+ *
+ * TODO (needs hardware):
+ *   - confirm SoC from the fex and whether both A23/A33 images are needed
+ *   - gamepad GPIO map & the analog-stick MCU protocol/UART pins
+ *   - panel reset GPIO and power supply rail
+ *   - LEDs, volume keys (LRADC ladder), mmc card-detect
+ */
+#include "ga36mb.dtsi"
+
+/ {
+    model = "GamiJa R36S (goodluckOS port)";
+};
+
+&dsi {
+    /* The statement block in ga36mb.dtsi declares the JD9366 panel; the
+     * GamiJa uses an NV3051D-compatible controller instead. */
+    /delete-node/ panel@0;
+
+    panel@0 {
+        compatible = "anbernic,rg351v-panel"; /* NV3051D, 640x480, 4-lane DSI */
+        reg = <0>;
+        vdd-supply = <&reg_dc1sw>;
+        reset-gpios = <&pio 7 7 GPIO_ACTIVE_LOW>; /* TBD: verify against fex/PCB */
+        backlight = <&backlight>;
+    };
+};

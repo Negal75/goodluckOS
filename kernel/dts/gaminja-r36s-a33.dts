@@ -1,0 +1,8 @@
+/dts-v1/;
+
+#include "sun8i-a33.dtsi"
+#include "gaminja-r36s.dtsi"
+
+/ {
+    compatible = "gaminja,r36s-a33-handheld", "allwinner,sun8i-a33";
+};

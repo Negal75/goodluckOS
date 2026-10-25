@@ -312,7 +312,7 @@
   <div x-data="{helpOpen: false}" :class="{'active-step': !step1Complete}">
     <h3>Step 1: Load your SD Card Image <span class="subhead" @click="helpOpen = ! helpOpen">help</span></h3>
     <div class="info-panel" x-show="helpOpen">
-        <p>For this step, you'll need an image of the stock microSD card that came with your GA36-MB. You only need the first 128mb, but if the image is larger that's fine.</p>
+        <p>For this step, you'll need an image of the stock microSD card that came with your device (GA36-MB or a clone such as the GamiJa R36S - for clones the tool will identify your hardware and gather what's needed for support, see <a href="https://github.com/CodeZombie/goodluckOS/issues/99">issue #99</a>). You only need the first 128mb, but if the image is larger that's fine.</p>
         <h4>Windows Guide</h4>
         <p>Plug the microSD card into your PC with an adapter and create an image with <a href="https://hddguru.com/software/HDD-Raw-Copy-Tool/HDDRawCopy1.20Portable.exe">HDD Raw Copy Tool v1.20</a></p>
         <h4>Linux Guide</h4>
@@ -343,6 +343,10 @@
         </div>
     <button class="secondary" x-show="hasScriptBin" @click="downloadScriptBin">
         Download your script.bin
+    </button>
+
+    <button class="secondary" x-show="layoutReport" @click="downloadLayoutReport">
+        Download layout report
     </button>
 
     <button class="bad" x-show="variant && !variant.supported" @click="proceedWithUnsupportedVariant">
@@ -423,8 +427,19 @@ const CONFIG = {
   STOCK_END_SECTOR: 172032,
 
   // Where the baked-in script.bin lives on the stock card, and how much to look at.
+  // Different firmware families use different bootloader layouts, so keep a
+  // probe list per layout and use whichever offset parses (see issue #99).
   SCRIPT_BIN_OFFSET: 20340736,
+  SCRIPT_BIN_OFFSETS: {
+    ga36mb:  [20340736],  // GA36-MB stock (Android-style firmware)
+    gaminja: [20488192]   // GamiJa R36S / Batocera clones (issue #99)
+  },
   SCRIPT_BIN_MAX_LENGTH: 131072,
+
+  // How far into the dump we're willing to scan when probing for script.bin
+  // in an unrecognized layout. Large enough to cover the GA36-MB bootloader
+  // region with room to spare, small enough to finish in a browser tab.
+  SCAN_LIMIT_BYTES: 256 * 1024 * 1024,
 
   GOODLUCK_BASE_IMAGE_URLS: {
     "a33_panel1": "https://github.com/CodeZombie/goodluckOS/releases/download/0.1.0/goodluck_base_a33_panel1.zip",
@@ -473,16 +488,16 @@ const SCRIPT_BIN = {
   SECTION_LIMIT: 0x100  // sanity limit taken from sunxi-tools
 };
 
-/** Walks the section/entry tables and returns the exact byte length of the script.bin content. */
-function computeScriptBinLength(buffer) {
-  const view = new DataView(buffer);
-  const size = buffer.byteLength;
+/** Walks the section/entry tables and returns the exact byte length of the script.bin content.
+ *  `view` covers a window of bytes; `start` is where the script.bin begins inside it. */
+function computeScriptBinLength(view, start = 0) {
+  const size = view.byteLength - start;
   const { HEADER_SIZE, SECTION_STRUCT, ENTRY_STRUCT, SECTION_LIMIT } = SCRIPT_BIN;
 
   if (size < HEADER_SIZE) throw new Error("Region too short for a script.bin header");
 
-  const sections = view.getUint32(0, true); // little-endian
-  if (sections > SECTION_LIMIT) {
+  const sections = view.getUint32(start, true); // little-endian
+  if (sections === 0 || sections > SECTION_LIMIT) {
     throw new Error(`Unreasonable section count (${sections}); this probably isn't script.bin`);
   }
 
@@ -490,29 +505,146 @@ function computeScriptBinLength(buffer) {
   if (maxEnd > size) throw new Error("Section table runs past the end of the region");
 
   for (let i = 0; i < sections; i++) {
-    const sectionOffset = HEADER_SIZE + i * SECTION_STRUCT;
+    const sectionOffset = start + HEADER_SIZE + i * SECTION_STRUCT;
     const entryCount = view.getInt32(sectionOffset + 32, true);
     const entryTableOffset = view.getInt32(sectionOffset + 36, true) * 4; // stored in 32-bit words
 
     if (entryCount < 0 || entryTableOffset < 0) {
       throw new Error(`Malformed section ${i}: negative length/offset`);
     }
+    if (!isPrintableName(view, sectionOffset, 32)) {
+      throw new Error(`Section ${i} has a garbage name; this probably isn't script.bin`);
+    }
     const entryTableEnd = entryTableOffset + entryCount * ENTRY_STRUCT;
     if (entryTableEnd > size) throw new Error(`Section ${i}'s entry table runs past the region`);
     maxEnd = Math.max(maxEnd, entryTableEnd);
 
     for (let j = 0; j < entryCount; j++) {
-      const entryOffset = entryTableOffset + j * ENTRY_STRUCT;
+      const entryOffset = start + entryTableOffset + j * ENTRY_STRUCT;
       const dataOffset = view.getInt32(entryOffset + 32, true) * 4;
       const wordCount = view.getUint32(entryOffset + 36, true) & 0xffff;
 
       if (dataOffset < 0) throw new Error(`Malformed entry ${i}.${j}: negative data offset`);
+      if (!isPrintableName(view, entryOffset, 32)) {
+        throw new Error(`Entry ${i}.${j} has a garbage name; this probably isn't script.bin`);
+      }
       const dataEnd = dataOffset + wordCount * 4;
       if (dataEnd > size) throw new Error(`Entry ${i}.${j}'s data runs past the region`);
       maxEnd = Math.max(maxEnd, dataEnd);
     }
   }
   return maxEnd;
+}
+
+/** Section/entry names in real script.bin files are NULL-terminated printable ASCII.
+ *  Requiring that kills nearly all false positives when scanning a dump. */
+function isPrintableName(view, offset, length) {
+  const minName = 3; // real section names are e.g. "target", "platform"
+  let nonNull = 0;
+  for (let i = 0; i < length; i++) {
+    const c = view.getUint8(offset + i);
+    if (c === 0) return nonNull >= minName; // rest of the field is zero padding
+    if (c < 0x20 || c > 0x7e) return false;
+    nonNull++;
+  }
+  return nonNull >= minName;
+}
+
+/** Cheap pre-filter so we don't fully parse every candidate while scanning. */
+function isScriptBinPossibility(view, start) {
+  if (start + SCRIPT_BIN.HEADER_SIZE > view.byteLength) return false;
+  const sections = view.getUint32(start, true);
+  return sections > 0 && sections <= SCRIPT_BIN.SECTION_LIMIT;
+}
+
+/** Scans a dump for anything that parses as a valid script.bin.
+ *  Returns [{ offset, length }] sorted by offset. */
+async function findScriptBinCandidates(file, limitBytes) {
+  const CHUNK = 4 * 1024 * 1024;
+  const ALIGN = 4096;
+  const candidates = [];
+
+  for (let base = 0; base < limitBytes; base += CHUNK) {
+    const end = Math.min(base + CHUNK, limitBytes);
+    const view = new DataView(await file.slice(base, end).arrayBuffer());
+    for (let off = 0; off + SCRIPT_BIN.HEADER_SIZE <= view.byteLength; off += ALIGN) {
+      if (!isScriptBinPossibility(view, off)) continue;
+      try {
+        candidates.push({ offset: base + off, length: computeScriptBinLength(view, off) });
+      } catch (error) {
+        // Not script.bin; keep scanning.
+      }
+    }
+  }
+  return candidates;
+}
+
+/** Parses the MBR (and looks for a GPT) in the first 1024 bytes of a dump. */
+async function describePartitionTable(file) {
+  const view = new DataView(await file.slice(0, 1024).arrayBuffer());
+  const lines = [];
+
+  if (view.getUint16(510, false) === 0x55aa) {
+    lines.push("MBR: 0x55AA signature at byte 510");
+    for (let p = 0; p < 4; p++) {
+      const entry = 446 + p * 16;
+      const type = view.getUint8(entry + 4);
+      if (type === 0) continue;
+      const start = view.getUint32(entry + 8, true);
+      const count = view.getUint32(entry + 12, true);
+      lines.push(`MBR: partition ${p + 1}: type=0x${type.toString(16).padStart(2, "0")} start=${start} sectors (${(start * CONFIG.SECTOR / 1048576).toFixed(1)} MiB) count=${count} sectors (${(count * CONFIG.SECTOR / 1048576).toFixed(1)} MiB)`);
+    }
+  } else {
+    lines.push("MBR: no 0x55AA signature at byte 510 (unusual!)");
+  }
+
+  if (view.getUint32(CONFIG.SECTOR, false) === 0x20494645) { // "EFI " little-endian
+    lines.push("GPT: \"EFI PART\" header found at LBA 1");
+  }
+  return lines;
+}
+
+/** Marker strings that identify bootloader/kernel images inside a dump.
+ *  Sector-aligned so offsets can be turned straight into dd commands. */
+async function scanBootMarkers(file, limitBytes) {
+  const MARKERS = [
+    { name: "boot0 (eGON.BT0)", bytes: "eGON.BT0" },
+    { name: "boot1/u-boot (eGON)", bytes: "eGON" },
+    { name: "android boot image (ANDROID!)", bytes: "ANDROID!" }
+  ];
+  const SECTOR = CONFIG.SECTOR;
+  const CHUNK = 4 * 1024 * 1024;
+  const hits = [];
+
+  for (let base = 0; base < limitBytes; base += CHUNK) {
+    const end = Math.min(base + CHUNK, limitBytes);
+    const view = new DataView(await file.slice(base, end).arrayBuffer());
+    // Compare ASCII signatures at every sector-aligned offset.
+    for (let off = 0; off + 8 <= view.byteLength; off += SECTOR) {
+      for (const m of MARKERS) {
+        if (viewSigMatches(view, off, m.bytes)) {
+          m.hits = (m.hits || 0) + 1;
+          m.offsets = m.offsets || [];
+          if (m.offsets.length < 12) m.offsets.push(base + off);
+        }
+      }
+    }
+  }
+
+  for (const m of MARKERS) {
+    if (m.hits > 0) {
+      hits.push(`${m.name}: ${m.hits} hit(s) at bytes [${m.offsets.join(", ")}${m.hits > 12 ? ", ..." : ""}]`);
+    }
+  }
+  return hits;
+}
+
+function viewSigMatches(view, offset, bytes) {
+  if (offset + bytes.length > view.byteLength) return false;
+  for (let i = 0; i < bytes.length; i++) {
+    if (view.getUint8(offset + i) !== bytes.charCodeAt(i)) return false;
+  }
+  return true;
 }
 
 async function sha256Hex(buffer) {
@@ -562,6 +694,10 @@ document.addEventListener("alpine:init", () => {
     step2Logs: createLog(),
     scriptBlob: null,   // extracted script.bin bytes
     variant: null,      // matched entry from KNOWN_HASHES
+    scriptOffset: null, // where script.bin was found in the stock dump
+    layoutName: null,   // ga36mb | gaminja | unknown
+    layoutReport: null, // downloadable text report for unrecognized layouts
+    buildable: false,   // false for layouts we don't know how to flash safely
     step1Complete: false,
     step2Complete: false,
     output: null,       // { url, name, label } once built
@@ -603,11 +739,16 @@ document.addEventListener("alpine:init", () => {
       this.step2Logs.clear();
       this.output = null;
       this.scriptBlob = null;
+      this.scriptOffset = null;
+      this.layoutName = null;
+      this.layoutReport = null;
+      this.buildable = false;
       this.variant = null;
 
 
       this.step1Complete = false;
       this.step2Complete = false;
+      this.layoutReport = null;
 
       try {
         if (this.stockFile) await this.checkStock(this.stockFile);
@@ -647,48 +788,153 @@ document.addEventListener("alpine:init", () => {
         return;
       }
 
-      const start = CONFIG.SCRIPT_BIN_OFFSET;
-      const region = await file.slice(start, start + CONFIG.SCRIPT_BIN_MAX_LENGTH).arrayBuffer();
+      this.scriptBlob = null;
+      this.scriptOffset = null;
+      this.layoutName = null;
+      this.layoutReport = null;
+      this.buildable = false;
 
-      let length;
-      try {
-        length = computeScriptBinLength(region);
-        this.step1Logs.addLine(`script.bin parsed: ${length} bytes`, "ok");
-      } catch (error) {
-        length = region.byteLength;
-        this.step1Logs.addLine(`script.bin parse failed (${error.message}); hashing raw region instead`, "bad");
+      // 1) Probe the known layout offsets.
+      const probeOffsets = [...new Set(
+        Object.values(CONFIG.SCRIPT_BIN_OFFSETS).flat()
+      )].sort((a, b) => a - b);
+
+      let parsed = null;
+      for (const off of probeOffsets) {
+        if (off + CONFIG.SCRIPT_BIN_MAX_LENGTH > file.size) {
+          this.step1Logs.addLine(`Cannot probe offset ${off}: dump too small.`, "bad");
+          continue;
+        }
+        const region = await file.slice(off, off + CONFIG.SCRIPT_BIN_MAX_LENGTH).arrayBuffer();
+        try {
+          const length = computeScriptBinLength(new DataView(region), 0);
+          this.step1Logs.addLine(`script.bin parsed at byte offset ${off}: ${length} bytes`, "ok");
+          parsed = { offset: off, region };
+          break;
+        } catch (error) {
+          this.step1Logs.addLine(`No script.bin at offset ${off} (${error.message})`, "");
+        }
       }
 
-      const bytes = region.slice(0, length);
-      this.scriptBlob = new Blob([bytes], { type: "application/octet-stream" });
-
-      const hash = await sha256Hex(bytes);
-      this.step1Logs.addLine("script.bin SHA-256: " + hash);
-
-      const match = CONFIG.KNOWN_HASHES[hash];
-      if (match) {
-        this.variant = match;
-        if (match.supported) {
-          this.step1Complete = true;
-          this.step1Logs.addLine("Approved variant: " + match.name, "ok");
-          this.step1Logs.addLine("Variant SoC: " + match.soc, "ok");
-        } else {
-          if (this.allowUnsupportedVariant) {
-            this.step1Complete = true;
+      // 2) Fall back to scanning the stock region for any valid script.bin.
+      if (!parsed) {
+        this.step1Logs.addLine("Probing dump for script.bin at an unrecognized layout...", "");
+        const scanLimit = Math.min(file.size, CONFIG.SCAN_LIMIT_BYTES, stockEnd);
+        const candidates = await findScriptBinCandidates(file, scanLimit);
+        for (const cand of candidates) {
+          const region = await file.slice(cand.offset, cand.offset + CONFIG.SCRIPT_BIN_MAX_LENGTH).arrayBuffer();
+          const view = new DataView(region);
+          try {
+            const length = computeScriptBinLength(view, 0);
+            this.step1Logs.addLine(`script.bin found by scan at byte offset ${cand.offset}: ${length} bytes`, "ok");
+            parsed = { offset: cand.offset, region };
+            break;
+          } catch (error) {
+            // Race with chunk boundaries can break parsing; skip.
           }
-          this.step1Logs.addLine("Unsupported variant: " + match.name, "bad");
-          this.step1Logs.addLine("Variant SoC: " + match.soc, "bad");
-          this.step1Logs.addLine("Your device is recognized, but not yet supported by goodluckOS.", "bad");
-          this.step1Logs.addLine("If you're feeling up to it, I'm looking to buy or loan A23-based GA36-MB devices from people like you! Send me an email or open an issue on github and we'll set something up.", "ok");
+        }
+        if (!parsed) {
+          this.step1Logs.addLine(`No valid script.bin found in the first ${scanLimit} bytes.`, "bad");
+        }
+      }
+
+      // 3) Classify the layout.
+      if (parsed) {
+        this.scriptOffset = parsed.offset;
+        this.layoutName = "unknown";
+        for (const [name, offs] of Object.entries(CONFIG.SCRIPT_BIN_OFFSETS)) {
+          if (offs.includes(parsed.offset)) this.layoutName = name;
+        }
+        this.step1Logs.addLine("Stock layout family: " + this.layoutName, this.layoutName === "ga36mb" ? "ok" : "bad");
+        this.step1Logs.addLine("script.bin SHA-256: " + (await sha256Hex(parsed.region)), "");
+
+        // Match against approved script.bin hashes.
+        const length = computeScriptBinLength(new DataView(parsed.region), 0);
+        const bytes = parsed.region.slice(0, length);
+        this.scriptBlob = new Blob([bytes], { type: "application/octet-stream" });
+        const hash = await sha256Hex(bytes);
+
+        const match = CONFIG.KNOWN_HASHES[hash];
+        if (match) {
+          this.variant = match;
+          if (match.supported) {
+            this.step1Complete = true;
+            this.step1Logs.addLine("Approved variant: " + match.name, "ok");
+            this.step1Logs.addLine("Variant SoC: " + match.soc, "ok");
+          } else {
+            if (this.allowUnsupportedVariant) {
+              this.step1Complete = true;
+            }
+            this.step1Logs.addLine("Unsupported variant: " + match.name, "bad");
+            this.step1Logs.addLine("Variant SoC: " + match.soc, "bad");
+            this.step1Logs.addLine("Your device is recognized, but not yet supported by goodluckOS.", "bad");
+            this.step1Logs.addLine("If you're feeling up to it, I'm looking to buy or loan A23-based GA36-MB devices from people like you! Send me an email or open an issue on github and we'll set something up.", "ok");
+          }
+        } else if (this.layoutName === "ga36mb") {
+          this.step1Logs.addLine("------------------------", "bad");
+          this.step1Logs.addLine("Unknown Hardware Variant", "bad");
+          this.step1Logs.addLine("------------------------", "bad");
+          this.step1Logs.addLine("Please save a copy of your script.bin file and submit it to us for review here:", "bad");
+          this.step1Logs.addLine("https://github.com/CodeZombie/goodluckOS/issues", "link");
+          this.step1Logs.addLine("If we determine that goodluckOS is safe to use with your device, we'll add support in this tool and notify you when it's ready.", "bad");
+        } else {
+          // GamiJa / Batocera clones and other unknown layouts: identification
+          // works, but we can't safely build an image yet (see issue #99).
+          this.buildable = false;
+          this.step1Logs.addLine("-------------", "bad");
+          this.step1Logs.addLine("New stock layout", "bad");
+          this.step1Logs.addLine("-------------", "bad");
+          this.step1Logs.addLine("This card uses a bootloader layout we don't know how to flash yet.", "bad");
+          this.step1Logs.addLine("goodluckOS images CANNOT be built for it — attempting to would not boot and may brick the device.", "bad");
+          this.step1Logs.addLine("Please download your script.bin and the layout report, and attach both to:", "bad");
+          this.step1Logs.addLine("https://github.com/CodeZombie/goodluckOS/issues/99", "link");
+          this.step1Logs.addLine("With that data we can map this layout and add proper support.", "ok");
+          await this.generateLayoutReport(file, stockEnd);
         }
       } else {
-        this.step1Logs.addLine("------------------------", "bad");
-        this.step1Logs.addLine("Unknown Hardware Variant", "bad");
-        this.step1Logs.addLine("------------------------", "bad");
-        this.step1Logs.addLine("Please save a copy of your script.bin file and submit it to us for review here:", "bad");
+        this.step1Logs.addLine("Nothing recognized in this dump. Please open an issue at:", "bad");
         this.step1Logs.addLine("https://github.com/CodeZombie/goodluckOS/issues", "link");
-        this.step1Logs.addLine("If we determine that goodluckOS is safe to use with your device, we'll add support in this tool and notify you when it's ready.", "bad");
       }
+    },
+
+    async generateLayoutReport(file, stockEnd) {
+      const lines = [];
+      lines.push("goodluckOS stock-dump layout report");
+      lines.push("Generated: " + new Date().toISOString());
+      lines.push("File: " + (this.stockFile ? this.stockFile.name : "?") + " (" + file.size + " bytes)");
+      lines.push("");
+
+      lines.push("-- Partition table --");
+      for (const line of await describePartitionTable(file)) {
+        lines.push(line);
+      }
+
+      lines.push("");
+      lines.push("-- Bootloader/kernel markers (sector-aligned, first " + Math.min(file.size, stockEnd) + " bytes) --");
+      const markers = await scanBootMarkers(file, Math.min(file.size, stockEnd));
+      lines.push(...(markers.length > 0 ? markers : ["No eGON.BT0 / eGON / ANDROID! markers found."]));
+
+      lines.push("");
+      lines.push("-- script.bin probes --");
+      for (const [name, offs] of Object.entries(CONFIG.SCRIPT_BIN_OFFSETS)) {
+        lines.push(`${name}: candidate offsets ${offs.join(", ")}`);
+      }
+      if (this.scriptOffset !== null) {
+        lines.push(`script.bin used by this tool: byte offset ${this.scriptOffset} (sector ${this.scriptOffset / CONFIG.SECTOR})`);
+        lines.push(`  SHA-256: ${await sha256Hex(this.scriptBlob ? await this.scriptBlob.arrayBuffer() : new ArrayBuffer(0))}`);
+        lines.push("  Convert to a .fex for inspection with: sunxi-fexc -u script.bin script.fex");
+      }
+
+      this.layoutReport = lines.join("\n") + "\n";
+    },
+
+    downloadLayoutReport() {
+      const blob = new Blob([this.layoutReport || ""], { type: "text/plain" });
+      const link = document.createElement("a");
+      link.href = URL.createObjectURL(blob);
+      link.download = "goodluckos_layout_report.txt";
+      link.click();
+      setTimeout(() => URL.revokeObjectURL(link.href), 10000);
     },
 
     async checkBase(file) {
@@ -720,6 +966,10 @@ document.addEventListener("alpine:init", () => {
     },
 
     build() {
+      if (this.layoutName !== null && this.layoutName !== "ga36mb") {
+        this.step2Logs.addLine("[Build] This stock card uses a non-GA36-MB bootloader layout; building is disabled to protect your device. See issue #99.", "bad");
+        return;
+      }
       const { SECTOR, STOCK_END_SECTOR } = CONFIG;
       const stockEnd = STOCK_END_SECTOR * SECTOR;
 

@@ -15,6 +15,15 @@ WORKDIR /workspace
 
 ARG VARIANT
 
+# Sector (512-byte units) where the android boot image lives.
+#
+# GA36-MB stock cards boot their kernel from sector 172032 (84 MiB). The
+# GamiJa R36S (Batocera clone, issue #99) uses a different layout, so its
+# build must pass the measured kernel sector via BOOT_SECTOR instead. Until
+# a stock GamiJa dump has been fully mapped (docs/gaminja-r36s.md), only
+# 172032 is known to be safe.
+ARG BOOT_SECTOR=172032
+
 RUN truncate -s 1G "goodluck_${VARIANT}.img" && \
     parted -a optimal -s "goodluck_${VARIANT}.img" \
     mklabel msdos \
@@ -24,7 +33,12 @@ RUN truncate -s 1G "goodluck_${VARIANT}.img" && \
 RUN dd if=/dev/zero of="goodluck_${VARIANT}.img" bs=512 skip=1 seek=1 count=262143 conv=notrunc
 
 COPY "staging/android_boot_${VARIANT}.img" ./
-RUN dd if="android_boot_${VARIANT}.img" of="goodluck_${VARIANT}.img" bs=512 seek=172032 conv=notrunc
+# Guard: a kernel pushed at/inside the linux partition (start 128MiB =
+# sector 262144) would get overwritten by rootfs content (or vice versa).
+# If the measured GamiJa kernel offset lands there, the partition layout in
+# this Dockerfile must be re-worked first.
+RUN test ${BOOT_SECTOR} -lt 262144 -a ${BOOT_SECTOR} -gt 1024 || (echo "BOOT_SECTOR must be between sectors 1024 and 262143 (outside both partitions) but is ${BOOT_SECTOR}" && false)
+RUN dd if="android_boot_${VARIANT}.img" of="goodluck_${VARIANT}.img" bs=512 seek=${BOOT_SECTOR} conv=notrunc
 
 COPY staging/rootfs.tar ./
 RUN guestfish -a "goodluck_${VARIANT}.img" <<EOF

@@ -88,6 +88,7 @@ If the Firmware Builder tells you your device is not supported, you may have a n
 #### Coming Soon:
 - R36MAX
 - F35v
+- GamiJa R36S (Batocera clone) - work in progress, see [issue #99](https://github.com/CodeZombie/goodluckOS/issues/99)
 - Other A23/A33-based devices
 
 Know of another Allwinner-based handheld not listed on this page? Open a new [Issue](https://github.com/CodeZombie/goodluckOS/issues) and let me know!
