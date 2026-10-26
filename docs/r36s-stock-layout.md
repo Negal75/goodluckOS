@@ -221,6 +221,40 @@ backup dump. stock env partition is overwritten — keep a full dump.
 Regression tests (fully synthetic card, no hardware/dump needed):
 `python3 tests/install-gaminja.test.py`.
 
+### Flash-day runbook (real hardware, USB card reader on the PC)
+
+The agreed write path: a cheap USB-C OTG microSD reader + this PC.
+Work directly on the real card (file-swap install keeps GAMES/saves
+intact); only the p3 boot files and the env partition change.
+
+1. **Buy the reader**, insert the stock card, find the device:
+   `lsblk -o NAME,SIZE,MODEL,TRAN` — the card is the smallest mmc/usb
+   block device (e.g. `/dev/sdb`). Triple-check the size before
+   proceeding; NEVER assume the device letter.
+2. **Full-card backup first** (the only true undo):
+   `sudo dd if=/dev/sdX of=card-backup.img bs=4M status=progress`
+   A 16 GiB card needs ~16 GiB free — if `/` doesn't have it, use the
+   spare SSD (`nvme0n1p3`, unmounted; mounting it needs sudo).
+3. **Check the real card's script.bin against the pinned hash**:
+   `./image/tools/install-gaminja.py --target /dev/sdX` (plan mode).
+   If the hash differs from `1b78d3d5…1b2193` (expected — the analyzed
+   image is a community build; the real card runs the stock revision),
+   re-run with `--expect-scriptbin <measured sha256>` and record the
+   stock hash for the issue #99 whitelist discussion.
+4. **Install** (kernel already built and verified in `kernel/out/`):
+   `./image/tools/install-gaminja.py --target /dev/sdX \
+       --uimage kernel/out/uImage_gaminja_a33_panel1 --write`
+   No `--rootfs-file` yet (stock rootfs stays; goodluckOS boots from
+   the stock rootfs layout via `root=/dev/mmcblk0p5`). Retry with the
+   `_panel2` uImage if the screen stays black.
+5. **Boot test**: unplug, insert in the console, power on. Serial
+   console is `PB0/PB1` (fex uart0) at 115200 if pads are accessible;
+   otherwise judge by screen/backlight/LED. Buttons and volume keys are
+   wired from the fex map; analog sticks are NOT (no driver yet).
+6. **Rollback if needed**: `mcopy` the backed-up `uImage`/`uInitrd`
+   back onto the card's `boot` partition and restore the env partition
+   from the full-card backup (or `dd` the whole backup image back).
+
 ## 8. Artifacts (kept out of git in `image/out/r36s-analysis/`)
 
 - `layout_report.txt` — analyzer output
