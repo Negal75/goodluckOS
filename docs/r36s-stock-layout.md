@@ -109,26 +109,61 @@ cross-checked against the driver's modelines.
     amux-channel-mapping = 6 7 5 4   <-- GPADC ch. 6,7 = sticks? 5,4 = triggers?
     button-adc-deadzone = 64 ... poll-interval = 3
     invert-absx = 1  invert-absy = 1
-[gpiokey_para]
-    key_cnt = 19                  <-- digital buttons via gpio-keys
-    key0/key1: code 114/115 (KEY_VOLUMEUP/DOWN)
-    keys 304..318 (BTN_TRIGGER_HAPPY1..15), 704, 544..547
+[gpiokey_para]   (GPIO values are six u32 words port,pin,mux,pull,drv,data;
+                  port bank index 1=PA .. 8=PH, 12=PL/R_PIO; 0xffff = none)
+    key_cnt = 19
+    key0 114 VOLUMEDOWN PH05   } collide with twi1 (PH4/PH5) pins and
+    key1 115 VOLUMEUP   PH04   } duplicate [key_para] -> template junk
+    key2  304 BTN_SOUTH   PG08        key3  305 BTN_EAST   PG07
+    key4  307 BTN_NORTH   PG10        key5  308 BTN_WEST    PG09
+    key6  310 BTN_TL      PL09        key7  311 BTN_TR      PL11
+    key8  312 BTN_TL2     PL08        key9  313 BTN_TR2     PL10
+    key10 314 BTN_SELECT  PG12        key11 315 BTN_START   PG11
+    key12 317 BTN_THUMBL  PL04        key13 318 BTN_THUMBR  PL03
+    key14 704 KEY_SLEEP   PG13        (power button; AXP PEK also present)
+    key15 544 BTN_TRIGGER_HAPPY1 PB02   key16 545 HAPPY2 PB06
+    key17 546 BTN_TRIGGER_HAPPY3 PB03   key18 547 HAPPY4 PB07
+[key_para]
+    key_used = 1, key1_vol = 190 -> code 114, key2_vol = 390 -> code 115
+    <-- volume keys are the LRADC ladder (same as GA36-MB), NOT GPIO
 ```
 
-So mainline needs: `gpio-keys` for 19 buttons + an ADC-joystick driver on
-GPADC channels 4/5/6/7 (`sun4i-gpadc-iio` supports A33 GPADC; may need
-channel 4-7 enablement). No serial MCU protocol to reverse.
+So mainline needs: `gpio-keys` for the 17 GPIO buttons (PG/PL/PB banks,
+active low, debounce 5 ms) + LRADC volume keys (ga36mb.dtsi already
+implements that) + an ADC-joystick driver on GPADC channels 4/5/6/7
+(`sun4i-gpadc-iio` supports A33 GPADC; the BSP does a per-sample amux
+switch that mainline lacks, so the sticks need a small driver port or
+deferred support). No serial MCU protocol to reverse.
+
+### Other fex findings (second decode pass, after the GPIO-layout fix)
+
+- LEDs ([bat_leds], [led_para] has led_used=0): work_led = PE14,
+  bat_led = PL02, active high. The GA36-MB LED pins (PL04, PG13)
+  collide with the R36S thumb/power buttons.
+- uart0 (console) = PB0/PB1 mux 3 = mainline "uart0" function.
+  uart1 (PG6-PG9, GA36-MB gamepad MCU port) = twi_used 0 → drop.
+- twi0 = PH2/PH3 (used), twi1 = PH4/PH5 (unused), twi2 = PE12/PE13
+  (used; only referenced by the unused camera sensor config).
+- PMU: `[pmu1_para] pmu_twi_addr = 52 (0x34)` but `pmu_twi_id = 1`
+  is a fex template default (twi1 is explicitly unused). `[s_rsb0]
+  s_rsb_used = 1` on PL0/PL1 → the PMU is wired to RSB like the
+  GA36-MB; AXP223 answers on both RSB and i2c.
+- Panel power: lcd_power = axp22_dc1sw, lcd_power1 = axp22_eldo2
+  (1.8 V), reset/lcd_gpio_0 = PH07. Backlight PWM ch0 on PH00,
+  lcd_pwm_freq = 50000 → 20 µs period; disp_init lcd0_backlight = 50.
+- SD slot: mmc0 on PF pins, CD = PB04 pull-up; second SDIO bus mmc1
+  on PG0-PG5 with CD = PG06. No wifi ([wifi_para] wifi_used = 0).
+- usb1 host port: VBUS drive = PH08 ([usbc1] usb_drv_vbus_gpio).
+- Speaker PA = PH09 ([audio0] audio_pa_ctrl) — same as GA36-MB A33,
+  so the sound wiring carries over unchanged.
+- dvfs: max 1200 MHz @ 1320 mV ([dvfs_table] LV3), boot_clock 1008.
+- thermal trips 75/90/110 °C ([ths_para]).
 
 ### Power / audio / USB
 
-- PMU on twi1 (i2c1), addr 0x34 (`pmu_twi_addr=52`), battery Rdc 114 mΩ
-  (A33 ships AXP-family PMUs; identify exact model from probe later).
-- `[audio0] headphone_vol = 59, pa_double_used = 1, headset_mic...` —
-  codec + external PA enabled ("pa_double" = speaker path), see full fex.
-- `[usbc0] usb_port_type = 0 (peripheral/OTG), usb_host_init_state = 0` —
-  explains why the console only enumerates as a gadget and the "OTG to
-  PC" attempt showed nothing: stock gadget driver may not be enabled.
-- `[wakeup_src_para]`, `[fel_key]` (fel on keys 2..7), `[key_detect_en]`.
+- PMU on RSB (PL0/PL1), addr 0x34 on i2c per [pmu_twi_addr], battery
+  Rdc 114 mΩ, cap 3368 mAh (AXP22x family; identify exact model from
+  probe on flash day).
 
 ## 5. OTG/USB note
 

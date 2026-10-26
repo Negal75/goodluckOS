@@ -1,45 +1,319 @@
 /*
  * GamiJa R36S (Batocera clone) - shared device tree baseline
  *
- * Tracked in goodluckOS issue #99. The GamiJa units run an Allwinner A33
- * (SoC confirmed from a unit owner's report; cross-check with the fex when
- * a dump is available - sunxi-fexc script.bin -> .fex), but the PCB differs
- * from the GA36-MB (unverified: button wiring, MCU/UART wiring, LED
- * placement...). This dtsi therefore includes ga36mb.dtsi as a known-good
- * starting point and makes only the changes we have evidence for. EVERY
- * node marked TBD below must be verified against the unit's fex and PCB
- * photos before being trusted.
+ * Tracked in goodluckOS issue #99. Everything below is decoded from the
+ * unit's own script.bin (see image/out/r36s-analysis/script.fex, produced
+ * by image/tools/scriptbin2fex.py from the real 9.53 GB stock dump) plus
+ * PCB evidence cross-checks. Every setting cites its fex source.
  *
- * Known so far (from issue #99):
- *   - Stock layout differs from GA36-MB (script.bin at byte 20488192; see
- *     image/tools/analyze-gaminja-dump.py).
- *   - Display is an NV3051-family panel. Upstream Linux already ships
- *     drivers/gpu/drm/panel/panel-newvision-nv3051d.c, so no
- *     reverse-engineered .ko is needed.
+ * Board summary (fex evidence):
+ *   - SoC: Allwinner A33 ("parrot"), boot_clock 1008, 512 MB DDR3 (dram_type=3)
+ *   - Display: NV3051D panel 640x480, 4-lane DSI, eotp=0 ([lcd0_para]):
+ *     ht=820 hbp=100 hspw=20 vt=510 vbp=16 vspw=4, dclk 24 MHz
+ *     lcd_power=axp22_dc1sw, lcd_power1=axp22_eldo2 (1.8 V), reset PH07
+ *   - Backlight: PWM ch0 on PH00, lcd_pwm_freq=50000 -> 20 us period
+ *   - Gamepad: analog sticks = GPADC (amux channels 6 7 5 4, invert x/y);
+ *     digital buttons are plain GPIOs ([gpiokey_para], see below). There is
+ *     NO UART-attached MCU (the GA36-MB gamepad driver does not apply).
+ *   - Volume keys: LRADC ladder ([key_para] 190/390 -> KEY_VOLUMEUP/DOWN).
+ *     The gpiokey PH04/PH05 entries duplicate those codes and collide with
+ *     twi1 pins; they are template leftovers and are not implemented.
+ *   - LEDs: work_led PE14, bat_led PL02 ([bat_leds], active high).
+ *   - Audio: codec + speaker/headphone PA on PH09 ([audio0]) - same as the
+ *     GA36-MB A33, so the sound wiring is inherited unchanged.
+ *   - USB: OTG in peripheral mode ([usbc0] usb_port_type=0; matches the
+ *     observed "console enumerates on phones but not PCs" behaviour); the
+ *     dedicated host port ([usbc1]) drives VBUS on PH08.
+ *   - PMU: AXP223. The unit wires it like the GA36-MB: RSB on PL0/PL1
+ *     ([s_rsb0] s_rsb_used=1). [pmu1_para] pmu_twi_id=1/addr=52 are fex
+ *     template defaults ([twi1] is explicitly twi_used=0); [twi_para] would
+ *     instead suggest i2c0 @PH2/PH3. RSB is kept for now - verify the PMU
+ *     probe on flash day via serial and switch to i2c0 if it fails.
+ *   - Console UART: fex uart0 on PB0/PB1, mux 3 (mainline "uart0" function).
+ *     Made serial0/ttyS0 so the stock bootargs console=ttyS0 keep working.
+ *   - mmc0 = SD slot (PF pins, CD PB04); mmc1 = second SDIO bus with CD PG06
+ *     (no wifi - [wifi_para] wifi_used=0; kept enabled as a plain SDIO bus).
  *
- * The exact panel variant is unknown (like the GA36-MB, units ship with
- * different panels and there is no way to tell them apart ahead of time).
- * The top-level gaminja-r36s-a33-panel1.dts / -panel2.dts files select the
- * compatible:
- *   panel1: "anbernic,rg351v-panel" - mode_flags include
- *           MIPI_DSI_MODE_NO_EOT_PACKET
- *   panel2: "anbernic,rg353p-panel" - same 640x480 modes, no EOT suppression
- * Just like the GA36-MB: try both if one gives you a black screen.
+ * GPIO key map ([gpiokey_para], 19 keys; PH04/PH05 dropped, see above):
+ *   PG07 BTN_EAST   PG08 BTN_SOUTH  PG09 BTN_WEST   PG10 BTN_NORTH
+ *   PG11 BTN_START  PG12 BTN_SELECT PG13 KEY_SLEEP  (KEY code 704)
+ *   PL03 BTN_THUMBR PL04 BTN_THUMBL PL08 BTN_TL2    PL09 BTN_TL
+ *   PL10 BTN_TR2    PL11 BTN_TR
+ *   PB02 BTN_TRIGGER_HAPPY1  PB03 BTN_TRIGGER_HAPPY3
+ *   PB06 BTN_TRIGGER_HAPPY2  PB07 BTN_TRIGGER_HAPPY4
  *
- * TODO (needs hardware):
- *   - cross-check SoC/mmr wiring against the unit's fex
- *   - gamepad GPIO map & the analog-stick MCU protocol/UART pins
- *   - panel reset GPIO and power supply rail
- *   - LEDs, volume keys (LRADC ladder), mmc card-detect
+ * Known deviations / TODO (verify on flash day via serial):
+ *   - analog sticks need the GPADC amux dance (stock 3.4 driver); mainline
+ *     has no equivalent, so only the digital buttons are wired for now.
+ *   - power key: PG13 -> KEY_SLEEP as configured, plus the AXP223 PEK.
+ *   - panel reset GPIO PH07 is taken from [lcd0_para] lcd_gpio_0 (BSP drives
+ *     it high); confirm polarity if the panel stays dark.
  */
 #include "ga36mb.dtsi"
 
 / {
     model = "GamiJa R36S (goodluckOS port)";
+    compatible = "gaminja,r36s-a33-handheld", "allwinner,sun8i-a33";
+
+    aliases {
+        /* fex uart0 (PB0/PB1) = stock console; make it ttyS0 so the stock
+         * u-boot env bootargs (console=ttyS0, rewritten by the installer)
+         * reach it. The GA36-MB aliases point ttyS0 at its gamepad MCU
+         * UART, which the R36S does not have. */
+        serial0 = &uart0;
+        mmc0 = &mmc0;
+        mmc1 = &mmc1;
+    };
+
+    chosen {
+        stdout-path = "serial0:115200n8";
+    };
+
+    /* Replace the GA36-MB LEDs (PL04/PG13 would fight the thumb buttons and
+     * the power key). fex [bat_leds]: work_led=PE14, bat_led=PL02, both
+     * driven high when lit (active_low=0). */
+    /delete-node/ leds;
+
+    leds {
+        compatible = "gpio-leds";
+
+        led-work {
+            function = LED_FUNCTION_STATUS;
+            gpios = <&pio 4 14 GPIO_ACTIVE_HIGH>;	/* PE14, fex work_led */
+            default-state = "off";
+        };
+
+        led-bat {
+            function = LED_FUNCTION_INDICATOR;
+            gpios = <&r_pio 0 2 GPIO_ACTIVE_HIGH>;	/* PL02, fex bat_led */
+            default-state = "off";
+        };
+    };
+
+    /* Digital gamepad buttons ([gpiokey_para]). All are GPIO_ACTIVE_LOW with
+     * default pull (the BSP muxes them as inputs); debounce 5 ms per fex.
+     * Volume keys live on the LRADC (ga36mb.dtsi), not here. */
+    gpio-keys {
+        compatible = "gpio-keys";
+        pinctrl-names = "default";
+        pinctrl-0 = <&r36s_key_pins>, <&r36s_key_r_pins>;
+
+        btn-a {
+            label = "GPIO Key A";
+            linux,code = <BTN_SOUTH>;
+            gpios = <&pio 6 8 GPIO_ACTIVE_LOW>;		/* PG08 */
+            debounce-interval = <5>;
+        };
+
+        btn-b {
+            label = "GPIO Key B";
+            linux,code = <BTN_EAST>;
+            gpios = <&pio 6 7 GPIO_ACTIVE_LOW>;		/* PG07 */
+            debounce-interval = <5>;
+        };
+
+        btn-x {
+            label = "GPIO Key X";
+            linux,code = <BTN_NORTH>;
+            gpios = <&pio 6 10 GPIO_ACTIVE_LOW>;	/* PG10 */
+            debounce-interval = <5>;
+        };
+
+        btn-y {
+            label = "GPIO Key Y";
+            linux,code = <BTN_WEST>;
+            gpios = <&pio 6 9 GPIO_ACTIVE_LOW>;		/* PG09 */
+            debounce-interval = <5>;
+        };
+
+        btn-start {
+            label = "GPIO Key Start";
+            linux,code = <BTN_START>;
+            gpios = <&pio 6 11 GPIO_ACTIVE_LOW>;	/* PG11 */
+            debounce-interval = <5>;
+        };
+
+        btn-select {
+            label = "GPIO Key Select";
+            linux,code = <BTN_SELECT>;
+            gpios = <&pio 6 12 GPIO_ACTIVE_LOW>;	/* PG12 */
+            debounce-interval = <5>;
+        };
+
+        btn-sleep {
+            label = "GPIO Key Power";
+            linux,code = <KEY_SLEEP>;
+            gpios = <&pio 6 13 GPIO_ACTIVE_LOW>;	/* PG13 */
+            debounce-interval = <5>;
+            wakeup-source;
+        };
+
+        btn-l1 {
+            label = "GPIO Key L1";
+            linux,code = <BTN_TL>;
+            gpios = <&r_pio 0 9 GPIO_ACTIVE_LOW>;	/* PL09 */
+            debounce-interval = <5>;
+        };
+
+        btn-r1 {
+            label = "GPIO Key R1";
+            linux,code = <BTN_TR>;
+            gpios = <&r_pio 0 11 GPIO_ACTIVE_LOW>;	/* PL11 */
+            debounce-interval = <5>;
+        };
+
+        btn-l2 {
+            label = "GPIO Key L2";
+            linux,code = <BTN_TL2>;
+            gpios = <&r_pio 0 8 GPIO_ACTIVE_LOW>;	/* PL08 */
+            debounce-interval = <5>;
+        };
+
+        btn-r2 {
+            label = "GPIO Key R2";
+            linux,code = <BTN_TR2>;
+            gpios = <&r_pio 0 10 GPIO_ACTIVE_LOW>;	/* PL10 */
+            debounce-interval = <5>;
+        };
+
+        btn-thumbl {
+            label = "GPIO Key ThumbL";
+            linux,code = <BTN_THUMBL>;
+            gpios = <&r_pio 0 4 GPIO_ACTIVE_LOW>;	/* PL04 */
+            debounce-interval = <5>;
+        };
+
+        btn-thumbr {
+            label = "GPIO Key ThumbR";
+            linux,code = <BTN_THUMBR>;
+            gpios = <&r_pio 0 3 GPIO_ACTIVE_LOW>;	/* PL03 */
+            debounce-interval = <5>;
+        };
+
+        btn-happy1 {
+            label = "GPIO Key Happy1";
+            linux,code = <BTN_TRIGGER_HAPPY1>;
+            gpios = <&pio 1 2 GPIO_ACTIVE_LOW>;		/* PB02 */
+            debounce-interval = <5>;
+        };
+
+        btn-happy2 {
+            label = "GPIO Key Happy2";
+            linux,code = <BTN_TRIGGER_HAPPY2>;
+            gpios = <&pio 1 6 GPIO_ACTIVE_LOW>;		/* PB06 */
+            debounce-interval = <5>;
+        };
+
+        btn-happy3 {
+            label = "GPIO Key Happy3";
+            linux,code = <BTN_TRIGGER_HAPPY3>;
+            gpios = <&pio 1 3 GPIO_ACTIVE_LOW>;		/* PB03 */
+            debounce-interval = <5>;
+        };
+
+        btn-happy4 {
+            label = "GPIO Key Happy4";
+            linux,code = <BTN_TRIGGER_HAPPY4>;
+            gpios = <&pio 1 7 GPIO_ACTIVE_LOW>;		/* PB07 */
+            debounce-interval = <5>;
+        };
+    };
+
+    /* Dedicated host port ([usbc1] usb_used=1, host_init_state=1) drives
+     * VBUS with PH08 (mainline A33 host controller = ehci0/ohci0 on
+     * usbphy 1). */
+    usb1_vbus: usb1-vbus {
+        compatible = "regulator-fixed";
+        regulator-name = "usb1-vbus";
+        regulator-min-microvolt = <5000000>;
+        regulator-max-microvolt = <5000000>;
+        gpio = <&pio 7 8 GPIO_ACTIVE_HIGH>;		/* PH08, fex usb_drv_vbus_gpio */
+        enable-active-high;
+    };
+};
+
+&pio {
+    /* fex [uart_para]: uart0 on PB0/PB1, mux 3 = mainline "uart0" function */
+    uart0_pb_pins: uart0-pb-pins {
+        pins = "PB0", "PB1";
+        function = "uart0";
+    };
+
+    /* All 17 GPIO buttons idle high (pull-ups) and pull to ground when
+     * pressed; mux 0 (GPIO input) is the pinctrl default, so this only
+     * needs the pin list for bias documentation. */
+    r36s_key_pins: r36s-key-pins {
+        pins = "PB2", "PB3", "PB6", "PB7",
+               "PG7", "PG8", "PG9", "PG10", "PG11", "PG12", "PG13";
+        function = "gpio_in";
+        bias-pull-up;
+    };
+};
+
+&r_pio {
+    /* Shoulder/thumb buttons sit on R_PIO (PL bank, fex port letter 12) */
+    r36s_key_r_pins: r36s-key-r-pins {
+        pins = "PL3", "PL4", "PL8", "PL9", "PL10", "PL11";
+        function = "gpio_in";
+        bias-pull-up;
+    };
+};
+
+/* Console UART (stock bootargs console=ttyS0) */
+&uart0 {
+    pinctrl-names = "default";
+    pinctrl-0 = <&uart0_pb_pins>;
+    status = "okay";
+};
+
+/* The GA36-MB UART setup does not apply to the R36S:
+ * - uart1 (PG6/PG7) hosted its gamepad MCU; on the R36S those pins are
+ *   [mmc1_para] sdc_det (PG06) and game buttons, so drop both.
+ * - uart2 (PB0/PB1) is the stock console on the R36S and is taken by uart0. */
+&uart1 {
+    /delete-node/ serial-gamepad;
+};
+
+&uart1 {
+    status = "disabled";
+};
+
+&uart2 {
+    status = "disabled";
+};
+
+&usbphy {
+    /* fex [usbc0]: usb_port_type=0 (plain device), detect_type=0 - there is
+     * no OTG ID pin (matches the console never enumerating as a host). */
+    /delete-property/ usb0_id_det-gpios;
+    usb1_vbus-supply = <&usb1_vbus>;
+};
+
+&usb_otg {
+    dr_mode = "peripheral";
+    status = "okay";
+};
+
+/* SD slot is removable with a card-detect pin (fex sdc_det=PB04) */
+&mmc0 {
+    /delete-property/ non-removable;
+};
+
+/* Second SDIO bus, CD on PG06 (no wifi; kept as a plain SDIO bus) */
+&mmc1 {
+    /delete-property/ broken-cd;
+    cd-gpios = <&pio 6 6 GPIO_ACTIVE_LOW>;	/* fex sdc_det=PG06 */
+};
+
+&backlight {
+    /* fex [lcd0_para]: lcd_pwm_ch=0, lcd_pwm_freq=50000 -> 20 us period
+     * (50 kHz); lcd0_backlight=50 -> 50 % default brightness. */
+    pwms = <&pwm 0 20000 0>;
+    default-brightness-level = <5>;
 };
 
 &dsi {
-    /* ga36mb.dtsi declares the JD9366 panel; the GamiJa uses an NV3051D-
+    /* ga36mb.dtsi declares the JD9366 panel; the R36S uses an NV3051D-
      * family controller instead. The compatible string is selected by the
      * panel1/panel2 top-level files; reg/reset/backlight live here.
      * NOTE: do not flash without one of them - without a compatible the
@@ -48,8 +322,23 @@
 
     panel@0 {
         reg = <0>;
-        vdd-supply = <&reg_dc1sw>;
-        reset-gpios = <&pio 7 7 GPIO_ACTIVE_LOW>; /* TBD: verify against fex/PCB */
+        vdd-supply = <&reg_dc1sw>;	/* fex lcd_power = axp22_dc1sw */
+        reset-gpios = <&pio 7 7 GPIO_ACTIVE_LOW>;	/* fex lcd_gpio_0 = PH07 */
         backlight = <&backlight>;
     };
+};
+
+/* fex lcd_power1 = axp22_eldo2 (1.8 V rail for the panel IO side); the
+ * NV3051D driver only takes one vdd supply, so keep eldo2 permanently on. */
+&reg_eldo2 {
+    regulator-always-on;
+    regulator-min-microvolt = <1800000>;
+    regulator-max-microvolt = <1800000>;
+    regulator-name = "vcc-panel-1v8";
+};
+
+/* fex [power_sply] dldo3_vol = 2800 (DSI/phy rail; ga36mb assumed 3.0 V) */
+&reg_dldo3 {
+    regulator-min-microvolt = <2800000>;
+    regulator-max-microvolt = <2800000>;
 };

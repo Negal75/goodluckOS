@@ -20,13 +20,13 @@ item lands or gets disproven.
 | NV3051D panel wired into the kernel build | **done** (untested, no hw) |
 | Panel identity | **done** — script.bin: `nv3051`, 640x480, 4-lane DSI, **eotp=0 → panel1 variant** |
 | GamiJa A33 DTB baseline (panel1 + panel2 variants) | **done** (untested, no hw) |
-| Analog stick mechanism | **done** — `adc_gamepad`, 4 GPADC muxes (ch. 4/5/6/7), no MCU |
-| Gamepad buttons | **done (map)** — 19 gpio-keys: 114/115 + BTN_TRIGGER_HAPPY set; GPIO pin numbers need a second look |
+| Analog stick mechanism | **done (map)** — `adc_gamepad`, 4 GPADC muxes (ch. 4/5/6/7), no MCU; **driver TODO** (BSP amux per-sample switching has no mainline equivalent) |
+| Gamepad buttons | **done (map)** — 17 GPIO keys decoded (PG07-13, PL03/04/08-11, PB02/03/06/07) + LRADC volume keys (key_para); PH04/PH05 entries are template junk; wired into `gaminja-r36s.dtsi` |
 | Kernel/boot offset of GamiJa stock firmware | **obsolete** — boot is FAT-file based; merge model doesn't apply (docs/r36s-stock-layout.md §3) |
 | Matches no approved script.bin hash yet | **hash measured**: `1b78d3d5...1b2193` — await whitelist |
 | GamiJa install mechanism (swap p3/uImage + env rewrite + rootfs) | **done (tooling)** — image/tools/install-gaminja.py, 15 regression tests |
 | Kernel uImage payload (appended-DTB, load 0x40008000) | **done (build)** — kernel/Dockerfile emits `uImage_gaminja_a33_panel1/2` |
-| DTB GPIOs vs real PCB | **open** — gamepad pins, LEDs, audio PA pin |
+| DTB GPIOs vs real PCB | **closed (fex)** — console uart0 PB0/PB1, LEDs PE14/PL02, audio PA PH09, usb1 VBUS PH08, panel reset PH07, PMU on RSB (PL0/PL1); verified only via serial on flash day |
 | Verified flash on real hardware | **not started** |
 
 ## What we know (from issue #99)
@@ -109,11 +109,14 @@ and MiB offsets so `dd` commands can be written straight from the report.
   whichever matches the unit's panel; just like the GA36-MB, try both if
   one gives a black screen.
 - `CONFIG_DRM_PANEL_NEWVISION_NV3051D` is enabled in `kernel/Dockerfile`;
-  build outputs `android_boot_gaminja_a33_panel1/2.img` + dtbs.
+  build outputs `uImage_gaminja_a33_panel1/2` + dtbs.
 
-The DTB baseline inherits the GA36-MB button/LED/audio map on purpose: it is
-the fastest way to get a kernel the LCD and serial console work on, then
-diff real hardware against it. Do not trust the inputs until verified.
+The DTB baseline previously inherited the GA36-MB button/LED/audio map as
+a placeholder; it now implements the R36S's own map decoded from
+script.bin (gpio-keys on PG/PL/PB pins, LRADC volume, R36S LEDs, uart0
+console on PB0/PB1, RSB PMU inherited from GA36-MB). Untested until flash
+day — serial console will confirm the PMU/panel probes first. Analog
+sticks are still unwired (BSP amux switching has no mainline equivalent).
 
 ### 4. Boot offset-aware base images
 
@@ -170,7 +173,9 @@ Headlines:
   `1b78d3d5…1b2193`; decoded with `scriptbin2fex.py`: panel =
   **nv3051 640x480 4-lane DSI with eotp=0 (→ the panel1/rg351v
   variant)**, analog = **ADC (`adc_gamepad`, GPADC ch. 4/5/6/7)**,
-  buttons = 19 gpio-keys, PMU on i2c1 @ 0x34, machine name `parrot`.
+  buttons = 17 GPIO keys (PG/PL/PB banks) + LRADC volume keys,
+  PMU on RSB (AXP223, GA36-MB-style PL0/PL1 wiring), console uart0 on
+  PB0/PB1, machine name `parrot`.
 - `magic.bin` = 512-byte ASCII GUID marker blob in `boot-res`; not boot
   data.
 
@@ -230,15 +235,21 @@ What each result means for the port plan:
    to the card and boot watching serial (`ttyS0`, 115200, USB TTY). Try
    `panel2` if the display stays black.
 4. **Fix the DTB against reality**: panel picked (panel1 vs panel2),
-   gamepad GPIOs + analog MCU protocol, LEDs, LRADC volume keys, audio.
+   PMU probe (RSB vs i2c0), LED colours/functions, usb1 VBUS polarity,
+   mmc1 usability. Gamepad buttons + volume keys are already wired from
+   the fex decode; the analog sticks still need a driver (BSP amux
+   switching has no mainline equivalent).
 5. **Full image + firmware-builder release once stable.**
 
 ## Open questions (anyone with a unit can help)
 
-- Does the GamiJa use the same GA36-MB gamepad-MCU-over-UART trick, or
-  button-driven analog on the SoC/LRADC?
-- Which AXP pmic variants are on the GamiJa PCB?
-- Is the second TF slot wired to mmc1?
-- Do these units ship different display panels per batch (like GA36-MB)?
+- How do the analog sticks behave with mainline `sun4i-gpadc-iio`
+  (channels 0-3 vs the fex's amux indices 4-7)? Determines whether a
+  small `adc-joystick`/`gpio-keys-polled` glue driver is needed.
+- Is the PMU reachable on i2c0 @0x34 too (fex `[pmu_twi_addr]=52`,
+  `[twi_para]` boot bus), or RSB-only like the GA36-MB?
+- What are the LED colours for work_led (PE14) / bat_led (PL02)?
+- Is the mmc1 SDIO bus wired to anything on the PCB (no wifi in the
+  stock config)?
 
 Record answers in [issue #99](https://github.com/CodeZombie/goodluckOS/issues/99).
