@@ -231,10 +231,14 @@ intact); only the p3 boot files and the env partition change.
    `lsblk -o NAME,SIZE,MODEL,TRAN` — the card is the smallest mmc/usb
    block device (e.g. `/dev/sdb`). Triple-check the size before
    proceeding; NEVER assume the device letter.
-2. **Full-card backup first** (the only true undo):
-   `sudo dd if=/dev/sdX of=card-backup.img bs=4M status=progress`
-   A 16 GiB card needs ~16 GiB free — if `/` doesn't have it, use the
-   spare SSD (`nvme0n1p3`, unmounted; mounting it needs sudo).
+2. **Backup — minimal is enough** (the file-swap install only touches
+   the first 67072 sectors ≈ 33 MiB: boot0, u-boot, script.bin, GPT,
+   p1 boot-res, p2 env, p3 boot; GAMES/rootfs_data/etc. are untouched):
+   `sudo dd if=/dev/sdX of=boot-area-backup.img bs=512 count=67072`
+   Restoring this 33 MiB image returns the card to 100 % stock — no
+   full-card backup needed for the file-swap test. (Still keep the
+   analyzed 9.5 GiB community image on disk as a fallback copy of the
+   whole firmware.)
 3. **Check the real card's script.bin against the pinned hash**:
    `./image/tools/install-gaminja.py --target /dev/sdX` (plan mode).
    If the hash differs from `1b78d3d5…1b2193` (expected — the analyzed
@@ -251,9 +255,10 @@ intact); only the p3 boot files and the env partition change.
    console is `PB0/PB1` (fex uart0) at 115200 if pads are accessible;
    otherwise judge by screen/backlight/LED. Buttons and volume keys are
    wired from the fex map; analog sticks are NOT (no driver yet).
-6. **Rollback if needed**: `mcopy` the backed-up `uImage`/`uInitrd`
-   back onto the card's `boot` partition and restore the env partition
-   from the full-card backup (or `dd` the whole backup image back).
+6. **Rollback**: `sudo dd if=boot-area-backup.img of=/dev/sdX bs=512`
+   (only writes the first 33 MiB — the card's other data is never
+   touched by the test), or restore the individual `uImage`/`uInitrd`
+   files from the backup dir the installer leaves next to the image.
 
 ## 8. Artifacts (kept out of git in `image/out/r36s-analysis/`)
 
