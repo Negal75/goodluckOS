@@ -1,6 +1,10 @@
 # GamiJa R36S stock card layout — measured findings
 
-Derived from a real stock dump: 9.53 GiB image (`r36s-no-games-10gb.img`),
+Derived from a real stock-firmware image: 9.53 GiB
+(`r36s-no-games-10gb.img`), a community-made custom build **based on the
+original firmware packed with the console** (provenance note: not a dump
+of the unit owner's own card — measured hashes/contents may vary from
+other stock revisions; the installer's script.bin gate handles this).
 analysed 2025 with `image/tools/analyze-gaminja-dump.py`,
 `image/tools/scriptbin2fex.py` and `image/tools/identify-file.py`.
 **Everything below is measured fact, not inference, and should be posted
