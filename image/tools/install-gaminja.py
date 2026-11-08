@@ -425,7 +425,7 @@ def main():
 
     env_pairs = {
         "bootcmd": f"fatload sunxi_flash boot {FATLOAD_TARGET:08x} uImage; bootm {FATLOAD_TARGET:08x}",
-        "bootargs": f"console=ttyS0,115200 root={args.root} rootfstype=ext4 rootwait rw panic=10",
+        "bootargs": f"console=ttyS0,115200 console=tty0 root={args.root} rootfstype=ext4 rootwait rw panic=10",
         "bootdelay": "0",
         "console": "ttyS0,115200",
     }
