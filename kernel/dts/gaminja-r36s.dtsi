@@ -342,3 +342,31 @@
     regulator-min-microvolt = <2800000>;
     regulator-max-microvolt = <2800000>;
 };
+
+/* DEBUGLED PMU bus sweep (diagnostic build): the labelled pmic with the
+ * panel's regulators stays on &r_rsb (PL0/PL1, GA36-MB wiring). Two extra
+ * UNLABELED pmic instances probe the remaining plausible buses; whichever
+ * glue actually reaches the chip turns off the work LED (see kernel
+ * patches/0002-axp20x-debugled-off-on-axp-probe.patch, which also lights
+ * the bat LED PL02 when either glue probes at all).
+ *   - i2c0 @0x34 on PH2/PH3 ([twi_para] in the fex)
+ *   - i2c1 @0x34 on PH4/PH5 ([pmu1_para] pmu_twi_id=1, pmu_twi_addr=52)
+ * Inert when the device answers on RSB only; remove all three but one
+ * once the PMU bus is confirmed on hardware. */
+&i2c0 {
+    status = "okay";
+
+    pmic@34 {
+        compatible = "x-powers,axp223";
+        reg = <0x34>;
+    };
+};
+
+&i2c1 {
+    status = "okay";
+
+    pmic@34 {
+        compatible = "x-powers,axp223";
+        reg = <0x34>;
+    };
+};

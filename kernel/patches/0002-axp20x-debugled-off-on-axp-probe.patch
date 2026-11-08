@@ -1,3 +1,72 @@
+diff --git a/drivers/mfd/axp20x-i2c.c b/drivers/mfd/axp20x-i2c.c
+index 5c93136f9..95fc9cab9 100644
+--- a/drivers/mfd/axp20x-i2c.c
++++ b/drivers/mfd/axp20x-i2c.c
+@@ -16,6 +16,7 @@
+ #include <linux/acpi.h>
+ #include <linux/err.h>
+ #include <linux/i2c.h>
++#include <linux/io.h>
+ #include <linux/module.h>
+ #include <linux/mfd/axp20x.h>
+ #include <linux/of.h>
+@@ -24,6 +25,20 @@
+ 
+ static int axp20x_i2c_probe(struct i2c_client *i2c)
+ {
++	/*
++	 * DEBUGLED (gaminja R36S): light the bat LED (PL02, r_pio data reg
++	 * 0x01f02c00 + 0x19c, bit 2 - active high) as soon as the I2C glue
++	 * probes - same meaning as the RSB path (see axp20x-rsb.c).
++	 * Diagnostic build only - revert once verified.
++	 */
++	{
++		void __iomem *rpio = ioremap(0x01f02c00, 0x40);
++
++		if (rpio) {
++			writel(readl(rpio + 0x19c) | (1u << 2), rpio + 0x19c);
++			iounmap(rpio);
++		}
++	}
+ 	struct axp20x_dev *axp20x;
+ 	int ret;
+ 
+diff --git a/drivers/mfd/axp20x-rsb.c b/drivers/mfd/axp20x-rsb.c
+index 059656f2a..8daf32ef8 100644
+--- a/drivers/mfd/axp20x-rsb.c
++++ b/drivers/mfd/axp20x-rsb.c
+@@ -16,6 +16,7 @@
+ #include <linux/acpi.h>
+ #include <linux/err.h>
+ #include <linux/mfd/axp20x.h>
++#include <linux/io.h>
+ #include <linux/module.h>
+ #include <linux/of.h>
+ #include <linux/regmap.h>
+@@ -27,6 +28,21 @@ static int axp20x_rsb_probe(struct sunxi_rsb_device *rdev)
+ 	struct axp20x_dev *axp20x;
+ 	int ret;
+ 
++	/*
++	 * DEBUGLED (gaminja R36S): light the bat LED (PL02, r_pio data reg
++	 * 0x01f02c00 + 0x19c, bit 2 - active high) as soon as the RSB glue
++	 * probes. Distinguishes "PMU glue never ran" from "glue ran but the
++	 * PMU did not answer". Diagnostic build only - revert once verified.
++	 */
++	{
++		void __iomem *rpio = ioremap(0x01f02c00, 0x40);
++
++		if (rpio) {
++			writel(readl(rpio + 0x19c) | (1u << 2), rpio + 0x19c);
++			iounmap(rpio);
++		}
++	}
++
+ 	axp20x = devm_kzalloc(&rdev->dev, sizeof(*axp20x), GFP_KERNEL);
+ 	if (!axp20x)
+ 		return -ENOMEM;
+diff --git a/drivers/mfd/axp20x.c b/drivers/mfd/axp20x.c
+index 679364189..6443038f1 100644
 --- a/drivers/mfd/axp20x.c
 +++ b/drivers/mfd/axp20x.c
 @@ -18,6 +18,7 @@
@@ -8,7 +77,7 @@
  #include <linux/kernel.h>
  #include <linux/mfd/axp20x.h>
  #include <linux/mfd/core.h>
-@@ -1463,6 +1464,22 @@
+@@ -1463,6 +1464,22 @@ int axp20x_device_probe(struct axp20x_dev *axp20x)
  
  	dev_info(axp20x->dev, "AXP20X driver loaded\n");
  
