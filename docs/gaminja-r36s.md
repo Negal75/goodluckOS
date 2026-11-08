@@ -23,7 +23,7 @@ item lands or gets disproven.
 | Analog stick mechanism | **done (map)** — `adc_gamepad`, 4 GPADC muxes (ch. 4/5/6/7), no MCU; **driver TODO** (BSP amux per-sample switching has no mainline equivalent) |
 | Gamepad buttons | **done (map)** — 17 GPIO keys decoded (PG07-13, PL03/04/08-11, PB02/03/06/07) + LRADC volume keys (key_para); PH04/PH05 entries are template junk; wired into `gaminja-r36s.dtsi` |
 | Kernel/boot offset of GamiJa stock firmware | **obsolete** — boot is FAT-file based; merge model doesn't apply (docs/r36s-stock-layout.md §3) |
-| Matches no approved script.bin hash yet | **hash measured**: `1b78d3d5...1b2193` — await whitelist |
+| Matches no approved script.bin hash yet | **two stock hashes measured** (community image `1b78d3d5…`, the unit's shipped card `6ef43e13…`) — installer gate goes per-unit (`--expect-scriptbin`) |
 | GamiJa install mechanism (swap p3/uImage + env rewrite + rootfs) | **done (tooling)** — image/tools/install-gaminja.py, 15 regression tests |
 | Kernel uImage payload (appended-DTB, load 0x40008000) | **done (build)** — kernel/Dockerfile emits `uImage_gaminja_a33_panel1/2` |
 | DTB GPIOs vs real PCB | **closed (fex)** — console uart0 PB0/PB1, LEDs PE14/PL02, audio PA PH09, usb1 VBUS PH08, panel reset PH07, PMU on RSB (PL0/PL1); verified only via serial on flash day |
