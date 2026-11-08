@@ -80,7 +80,7 @@
         led-work {
             function = LED_FUNCTION_STATUS;
             gpios = <&pio 4 14 GPIO_ACTIVE_HIGH>;	/* PE14, fex work_led */
-            default-state = "off";
+            default-state = "on";	/* DEBUG: gpio-leds probes early; revert before release */
         };
 
         led-bat {

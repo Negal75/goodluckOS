@@ -1,0 +1,33 @@
+--- a/drivers/mfd/axp20x.c
++++ b/drivers/mfd/axp20x.c
+@@ -18,6 +18,7 @@
+ #include <linux/delay.h>
+ #include <linux/err.h>
+ #include <linux/interrupt.h>
++#include <linux/io.h>
+ #include <linux/kernel.h>
+ #include <linux/mfd/axp20x.h>
+ #include <linux/mfd/core.h>
+@@ -1463,6 +1464,22 @@
+ 
+ 	dev_info(axp20x->dev, "AXP20X driver loaded\n");
+ 
++	/*
++	 * DEBUGLED (gaminja R36S): the device tree turns the work LED (PE14)
++	 * on as soon as gpio-leds probes; clear it here to signal that the
++	 * AXP PMU probed successfully on whichever bus we found it. If the
++	 * LED is still on later in boot, the PMU was never reached.
++	 * Diagnostic build only - revert once boot is verified.
++	 */
++	{
++		void __iomem *pio = ioremap(0x01c20800, 0x400);
++
++		if (pio) {
++			writel(readl(pio + 0xa0) & ~(1u << 14), pio + 0xa0);
++			iounmap(pio);
++		}
++	}
++
+ 	return 0;
+ }
+ EXPORT_SYMBOL(axp20x_device_probe);
