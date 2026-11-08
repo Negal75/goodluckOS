@@ -260,6 +260,21 @@ intact); only the p3 boot files and the env partition change.
    touched by the test), or restore the individual `uImage`/`uInitrd`
    files from the backup dir the installer leaves next to the image.
 
+### Hardware result (2026-11-08, stage-1 boot test)
+
+- Swapping only `uImage` (stock `uInitrd` + stock env kept) = **black
+  screen, no backlight, no activity on either panel variant** — the
+  stock OpenWrt 3.4 initramfs prevents the earlier mainline panel init.
+- Same `uImage` with `uInitrd` moved away (stock `fatload` of the
+  missing initramfs simply errors and `bootm` continues with the
+  kernel + appended DTB) = **screen + backlight light up on both panel
+  variants** — the mainline kernel boots the real R36S PCB and inits
+  the NV3051D panel. This validates the uImage payload, the board map
+  (panel, PMU on RSB, DRAM) and the file-swap install model itself.
+- Therefore the installer's `uInitrd` deletion is **mandatory**, not
+  a cleanup step, and the env rewrite (bootcmd without `uInitrd`) is
+  the correct final p3 state.
+
 ## 8. Artifacts (kept out of git in `image/out/r36s-analysis/`)
 
 - `layout_report.txt` — analyzer output
