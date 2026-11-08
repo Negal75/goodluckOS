@@ -241,6 +241,43 @@ What each result means for the port plan:
    switching has no mainline equivalent).
 5. **Full image + firmware-builder release once stable.**
 
+## Flash-day diagnostics (2026-11-08)
+
+No serial adapter on the unit, so visibility comes from one binary signal:
+the work LED (PE14), plus whatever the panel shows.
+
+| Boot | LED | Screen | Conclusion |
+|---|---|---|---|
+| DEBUGLED pan.1 | **on**, stays on | boot-res logo frozen | kernel **executes** (gpio-leds reached); no display stack, no console output |
+| DEBUGLED pan.2 | on | logo frozen | same — panel variant is not the differentiator |
+
+Consequences:
+
+- u-boot `boot_normal` chain (`fatload uImage; bootm`) works; magic.bin
+  (512-byte `boot-res` GUID marker on p1) is not gating the boot chain.
+- `console=tty0` in bootargs produces no text because fbcon never
+  attaches while the panel probe stays deferred — and `/dev/console`
+  only exists once a console driver does. Not "kernel silent", but
+  "kernel wedged before any console".
+- Current prime suspect: the PMU/AXP223 never probes, so every regulator
+  the panel chain needs (`dc1sw` vdd, `eldo2`, backlight rail) never
+  registers and DRM/DSI/panel defer forever.
+
+Active instrument: kernel patch
+`kernel/patches/0002-axp20x-debugled-off-on-axp-probe.patch` —
+`axp20x_device_probe()` clears PE14 after a successful AXP probe
+(works for i2c and rsb paths alike). Result meanings on next boot:
+
+- LED **off after a few seconds** → PMU probed on RSB (or wherever);
+  the failure is lower (panel/DSI/regulators) — next: panel flags,
+  reset polarity.
+- LED **on forever** → PMU never probed; next: PMU-on-i2c0 variant
+  (`pmu1_para`: `pmu_twi_addr=52`, `pmu_twi_id=1` in script.fex)
+  before conceding to a serial adapter.
+
+Wait ~10–20 s before reading the LED; the LED itself (gpio-leds) will
+have turned it on within the first second, the AXP probe happens later.
+
 ## Open questions (anyone with a unit can help)
 
 - How do the analog sticks behave with mainline `sun4i-gpadc-iio`
